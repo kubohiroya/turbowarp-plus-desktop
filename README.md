@@ -17,12 +17,28 @@ npm run webpack:compile
 npm run electron:start
 ```
 
-この手順は Desktop 本体の開発起動です。Plus Editor の固定 renderer を製品ホストへ統合する作業は [Desktop #3](https://github.com/kubohiroya/turbowarp-plus-desktop/issues/3) で扱います。公式アプリのローカルコピーを使う D3〜D6 の検証手順は [作品分離と排他](docs/project-process-lock.md) を参照してください。
+この手順では標準 renderer と Desktop のアドオン設定画面をビルドします。公式アプリのローカルコピーを使う D3〜D6 の検証手順は [作品分離と排他](docs/project-process-lock.md) を参照してください。
 
 - `npm run fetch` は素材ライブラリ、Packager、拡張の資産を準備します。
 - `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` は開発起動に不要なテスト用 Chromium の取得を省きます。
 - `npm run webpack:watch` は renderer の開発ビルドを更新します。main や preload の変更を反映するにはアプリを再起動します。
 - `docs/screenshots` は上流の文書用サブモジュールです。スクリーンショットが必要な場合は `git submodule update --init docs/screenshots` で取得します。
+
+## Plus Editor renderer の組み込み
+
+`config/plus-renderer.json` の Editor コミットと、その `site/source.json` の GUI コミットを別々のクリーンな checkout に用意します。固定した Editor の `.nvmrc` の Node.js 版で両方に `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci` を実行し、GUI 側で `node scripts/prepublish.mjs` を実行します。
+
+Desktop の作業ツリーから次を実行します。
+
+```sh
+npm run webpack:plus -- /absolute/path/to/editor /absolute/path/to/scratch-gui
+profile_dir=$(mktemp -d)
+TW_PLUS_DESKTOP_DATA_DIR="$profile_dir" TW_PLUS_DESKTOP_RENDERER=1 npm run electron:start
+```
+
+ビルドは Editor の Desktop 用 webpack 設定と GUI の既存接続口を使います。Plus renderer とそのアドオン設定画面は同じ固定 GUI からビルドします。成果物の `dist-renderer-webpack/editor/plus-gui/build-info.json` に Desktop・Electron・Editor・GUI・VM の採用版を記録し、同梱パッケージとライセンスの索引を添えます。
+
+起動時にフラグを外すと標準 renderer に切り替わります。標準 renderer では、Plus 作品や内容を判定できない既存ファイルへの上書きが拒否されます。別名で新規保存するか、Plus renderer で作品を開き直してください。
 
 ## 開発プロファイル
 

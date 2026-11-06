@@ -5,6 +5,7 @@ const {translate} = require('../l10n/index');
 const {APP_NAME} = require('../brand');
 const prompts = require('../prompts');
 const {writeFileAtomic} = require('../atomic-write-stream');
+const {plusRenderer} = require('../../config/feature-flags');
 
 class AddonsWindow extends AbstractWindow {
   /**
@@ -42,7 +43,8 @@ class AddonsWindow extends AbstractWindow {
       await writeFileAtomic(result.filePath, settings);
     });
 
-    this.loadURL(`tw-editor://./addons/addons.html${search ? `#${search}` : ''}`);
+    const directory = plusRenderer ? 'plus-gui' : 'addons';
+    this.loadURL(`tw-editor://./${directory}/addons.html${search ? `#${search}` : ''}`);
   }
 
   getDimensions () {

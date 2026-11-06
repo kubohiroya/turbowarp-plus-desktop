@@ -22,7 +22,9 @@ import {
 import {WrappedFileHandle} from './filesystem-api.js';
 import {setStrings} from '../prompt/prompt.js';
 
+// The locale provider remounts DesktopHOC within the same editor window.
 let mountedOnce = false;
+let projectTitle = '';
 
 /**
  * @param {string} filename
@@ -81,7 +83,7 @@ const DesktopHOC = function (WrappedComponent) {
     constructor (props) {
       super(props);
       this.state = {
-        title: ''
+        title: projectTitle
       };
       this.handleUpdateProjectTitle = this.handleUpdateProjectTitle.bind(this);
       this.handleRuntimeDisposed = this.handleRuntimeDisposed.bind(this);
@@ -136,9 +138,7 @@ const DesktopHOC = function (WrappedComponent) {
 
         const title = getDefaultProjectTitle(name);
         if (title) {
-          this.setState({
-            title
-          });
+          this.handleUpdateProjectTitle(title);
         }
 
         if (type === 'file' && name.endsWith('.sb3')) {
@@ -186,6 +186,7 @@ const DesktopHOC = function (WrappedComponent) {
       EditorPreload.dropPermissions();
     }
     handleUpdateProjectTitle (newTitle) {
+      projectTitle = newTitle;
       this.setState({
         title: newTitle
       });
