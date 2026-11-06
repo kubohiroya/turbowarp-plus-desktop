@@ -100,6 +100,12 @@ test('editor popouts require a reservation and isolate each child', {
     const button = (name, within = page) => within.getByRole('button', {name});
     const click = locator => locator.dispatchEvent('click');
     const press = (name, within = page) => click(button(name, within));
+    const reveal = async name => {
+      const trigger = button(name);
+      await click(trigger);
+      // The drawer focuses its panel on the next frame. Wait before opening its menu.
+      await trigger.locator('xpath=following-sibling::*[1]').and(page.locator(':focus')).waitFor({state: 'attached'});
+    };
     const internalToExternal = title => async () => {
       const panel = page.getByRole('region', {name: title});
       await press(layoutLabel, panel);
@@ -156,7 +162,7 @@ test('editor popouts require a reservation and isolate each child', {
 
     const stage = await open('stage', async () => {
       const displayLabel = /^(Stage display|ステージの表示)$/;
-      await press(/Reveal stage|ステージを展開/);
+      await reveal(/Reveal stage|ステージを展開/);
       await press(displayLabel);
       await click(page.getByRole('menu', {name: displayLabel}).getByRole('menuitem', {name: separateLabel}));
     });
@@ -165,7 +171,7 @@ test('editor popouts require a reservation and isolate each child', {
 
     const revealSprites = /Reveal sprite list|スプライト一覧を展開/;
     const list = await open('sprite-list', async () => {
-      await press(revealSprites);
+      await reveal(revealSprites);
       await press(/^(Undock sprite list|アンドック)$/);
       await internalToExternal(/^(Sprite list|スプライト一覧)$/)();
     });
@@ -175,7 +181,7 @@ test('editor popouts require a reservation and isolate each child', {
     await press(/Layout options|配置メニュー/);
     await click(page.getByRole('menuitemcheckbox', {name: /Show undock buttons|アンドックボタンを表示/}));
     const properties = await open('sprite-properties', async () => {
-      await press(revealSprites);
+      await reveal(revealSprites);
       const toggle = button(/^(Sprite|スプライト)$/);
       await click(toggle);
       await press(openLabel, toggle.locator('..'));
