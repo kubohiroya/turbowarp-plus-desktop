@@ -1,0 +1,268 @@
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const {spawn, execFileSync} = require('node:child_process');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const {setTimeout: delay} = require('node:timers/promises');
+
+const blockType = 'application/x.turbowarp.blocks3+json';
+const yamlType = 'application/x.turbowarp.yaml+json';
+const expectEventually = async (label, read) => {
+  const until = Date.now() + 25000;
+  let cause;
+  while (Date.now() < until) {
+    try {
+      const result = await read();
+      if (result) return result;
+    } catch (error) { cause = error; }
+    await delay(100);
+  }
+  throw new Error('Timed out: ' + label, {cause});
+};
+
+async function allowExtension (page) {
+  const review = page.locator('.twextsec-review');
+  await review.waitFor({timeout: 20000});
+  const unsandboxed = review.locator('input[name="execution-all"][value="unsandboxed"]');
+  if (await unsandboxed.count()) await unsandboxed.click();
+  await review.getByTestId('twextsec-complete').click();
+  await review.waitFor({state: 'hidden'});
+}
+
+async function selectBackdrop (page) {
+  const pin = page.getByRole('button', {name: /^(Pin sprite list|スプライト一覧を固定表示)$/});
+  if (!await pin.isVisible()) await page.getByRole('button', {name: /^(Reveal sprite list|スプライト一覧を展開)$/}).hover();
+  if (await pin.getAttribute('aria-pressed') === 'false') await pin.click();
+  await page.getByRole('button', {name: /^(Backdrops|背景)$/}).click();
+}
+
+async function openYaml (page) {
+  await selectBackdrop(page);
+  const hats = page.locator('[data-twpe-yaml-hat-icon]');
+  await hats.first().waitFor();
+  await hats.first().focus();
+  await page.keyboard.press('Enter');
+  const pane = page.locator('.twpe-yaml-dialog[open]');
+  await pane.getByRole('button', {name: /^(Copy or drag YAML|YAML をコピー／ドラッグ)$/}).waitFor();
+  return pane;
+}
+
+async function browserDrag (page, handle) {
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await cdp.send('Input.setInterceptDrags', {enabled: true});
+    await handle.hover({timeout: 4500});
+    const rect = await handle.boundingBox();
+    assert(rect);
+    const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+    const intercept = new Promise(resolve => cdp.once('Input.dragIntercepted', resolve));
+    await cdp.send('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y});
+    await cdp.send('Input.dispatchMouseEvent', {type: 'mousePressed', button: 'left', buttons: 1, clickCount: 1, x, y});
+    await cdp.send('Input.dispatchMouseEvent', {type: 'mouseMoved', button: 'left', buttons: 1, x: x - 4, y: y + 4});
+    await cdp.send('Input.dispatchMouseEvent', {type: 'mouseMoved', button: 'left', buttons: 1, x: x - 18, y: y + 22});
+    await cdp.send('Input.dispatchMouseEvent', {type: 'mouseMoved', button: 'left', buttons: 1, x: x - 25, y: y + 30});
+    const {data} = await Promise.race([intercept, delay(5000).then(() => { throw new Error('Drag not intercepted'); })]);
+    await cdp.send('Input.dispatchDragEvent', {type: 'dragCancel', x, y, data});
+    return data;
+  } finally {
+    await cdp.detach();
+  }
+}
+
+async function browserDrop (page, surface, data) {
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const rect = await surface.boundingBox();
+    assert(rect);
+    const x = rect.x + rect.width * 0.4, y = rect.y + rect.height * 0.7;
+    for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp.send('Input.dispatchDragEvent', {type, x, y, data});
+  } finally {
+    await cdp.detach();
+  }
+}
+
+test('two Desktop projects transfer scripts and YAML via the OS clipboard and cross-process drag data', {
+  skip: process.platform !== 'darwin' || !process.env.TW_D4_TEST_APP,
+  timeout: 155000
+}, async t => {
+  const {chromium} = require(process.env.TW_D4_PLAYWRIGHT);
+  const enabled = process.env.TW_D4_TEST_ENABLED !== '0';
+  const work = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-d4-transfer-'));
+  const profile = path.join(work, 'data');
+  const first = path.join(work, 'D4 Source.sb3');
+  const second = path.join(work, 'D4 Destination.sb3');
+  const clipboard = path.join(work, 'clipboard.json');
+  const logPath = path.join(work, 'electron.log');
+  const log = await fs.open(logPath, 'a');
+  const snapshot = operation => execFileSync('swift', [path.join(__dirname, 'clipboard-snapshot.swift'), operation, clipboard]);
+  snapshot('save');
+  const sessions = [];
+  let broker;
+  t.after(async () => {
+    for (const browser of sessions) await browser.close().catch(() => {});
+    if (broker) {
+      try { process.kill(-broker.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    }
+    snapshot('restore');
+    await fs.rm(clipboard, {force: true});
+    await log.close();
+  });
+  await fs.copyFile(process.env.TW_D4_TEST_SB3, first);
+  await fs.copyFile(process.env.TW_D4_TEST_SB3, second);
+  const binary = path.join(process.env.TW_D4_TEST_APP, 'Contents', 'MacOS', 'TurboWarp');
+  broker = spawn(binary, ['--remote-debugging-port=0', first, second], {
+    cwd: work, stdio: ['ignore', log.fd, log.fd], detached: true,
+    env: {...process.env, TW_PLUS_DESKTOP_PROJECT_ISOLATION: '1', TW_PLUS_DESKTOP_JSON_TRANSFER: enabled ? '1' : '0',
+      TW_PLUS_DESKTOP_DATA_DIR: profile}
+  });
+  const nameOf = page => page.evaluate(() => EditorPreload.getInitialFile()
+    .then(id => EditorPreload.getFile(id)).then(file => file.name));
+  try {
+    const root = path.join(profile, 'project-processes');
+    const ports = await expectEventually('two Electron project debug endpoints', async () => {
+      const profiles = await fs.readdir(root);
+      if (profiles.length !== 2) return null;
+      return await Promise.all(profiles.map(async name => {
+        const [port] = (await fs.readFile(path.join(root, name, 'DevToolsActivePort'), 'utf8')).split('\n');
+        return 'http://127.0.0.1:' + port;
+      }));
+    });
+    const lockRoot = path.join(profile, 'project-locks');
+    const records = await Promise.all((await fs.readdir(lockRoot)).filter(name => name.endsWith('.json'))
+      .map(async name => JSON.parse(await fs.readFile(path.join(lockRoot, name), 'utf8'))));
+    assert.equal(new Set(records.map(record => record.pid)).size, 2);
+    sessions.push(...await Promise.all(ports.map(port => chromium.connectOverCDP(port))));
+    const pages = await Promise.all(sessions.map(async browser => {
+      const context = browser.contexts()[0];
+      context.setDefaultTimeout(10000);
+      const page = await expectEventually('native editor window', () => context.pages().find(page => page.url().startsWith('tw-editor:')));
+      page.on('dialog', dialog => { t.diagnostic(dialog.message()); void dialog.dismiss(); });
+      await allowExtension(page);
+      await page.waitForFunction(() => window.vm?.runtime.extensionStorage.twpeyamlsettings?.documents &&
+        window.ScratchBlocks?.getMainWorkspace() && !vm.editingTarget?.isStage);
+      assert.equal(await page.evaluate(() => EditorPreload.projectJSONTransfer), enabled);
+      return {page, context, name: await nameOf(page)};
+    }));
+    const {page: A, context: sender} = pages.find(item => item.name === 'D4 Source.sb3');
+    const {page: B, context: recipient} = pages.find(item => item.name === 'D4 Destination.sb3');
+    if (!enabled) {
+      assert.equal(await A.locator('.tw-plus-script-transfer-drag').count(), 0);
+      await selectBackdrop(B);
+      const hat = B.locator('[data-twpe-yaml-hat-icon]').first();
+      await hat.focus();
+      await B.keyboard.press('Enter');
+      const pane = B.locator('.twpe-yaml-dialog[open]');
+      await pane.waitFor();
+      assert.equal(await pane.getByRole('button', {name: /^(Paste YAML|YAML を貼り付け)$/}).count(), 0);
+      return;
+    }
+    await A.bringToFront();
+    await A.evaluate(() => {
+      const target = vm.editingTarget;
+      target.createVariable('d4-counter', 'D4 counter', '');
+      target.variables['d4-counter'].value = 37;
+      target.blocks.createBlock({id: 'd4-script', opcode: 'data_changevariableby', topLevel: true,
+        shadow: false, parent: null, next: null, x: 250, y: 150,
+        fields: {VARIABLE: {name: 'VARIABLE', id: 'd4-counter', value: 'D4 counter'}},
+        inputs: {VALUE: {name: 'VALUE', block: 'd4-number', shadow: 'd4-number'}}});
+      target.blocks.createBlock({id: 'd4-number', opcode: 'math_number', topLevel: false,
+        shadow: true, parent: 'd4-script', next: null,
+        fields: {NUM: {name: 'NUM', value: '1'}}, inputs: {}});
+      vm.refreshWorkspace();
+    });
+    await A.waitForFunction(() => ScratchBlocks.getMainWorkspace().getBlockById('d4-script'));
+    const selectScript = () => A.evaluate(() => ScratchBlocks.getMainWorkspace().getBlockById('d4-script').select());
+    await selectScript();
+    assert.equal(await A.locator('.tw-plus-script-transfer-drag').count(), 1);
+    const permitClipboard = async context => {
+      const prompt = context.pages().find(page => page.url().startsWith('tw-security-prompt:'));
+      if (prompt) await prompt.locator('.allow:enabled').click({timeout: 6000});
+      return Boolean(prompt);
+    };
+    const clipboardContains = async (context, text) => {
+      await permitClipboard(context);
+      return execFileSync('pbpaste', {encoding: 'utf8'}).includes(text);
+    };
+    await A.evaluate(() => document.activeElement?.blur());
+    await A.keyboard.press('Meta+c');
+    await expectEventually('native clipboard text', () => clipboardContains(sender, 'D4 counter'));
+
+    await B.bringToFront();
+    await B.evaluate(() => document.activeElement?.blur());
+    await B.keyboard.press('Meta+v');
+    await expectEventually('the existing native clipboard permission dialog', () => permitClipboard(recipient));
+    const scripts = page => page.evaluate(() => Object.values(vm.editingTarget.blocks._blocks)
+      .filter(block => block.opcode === 'data_changevariableby').length);
+    await expectEventually('the destination imported the OS clipboard script', async () => await scripts(B) === 1);
+    assert.equal(await B.evaluate(() => Object.values(vm.editingTarget.variables).find(item => item.name === 'D4 counter')?.value), 37);
+    t.diagnostic('OS clipboard imported a block and its variable into a separate process.');
+
+    await A.bringToFront();
+    await selectScript();
+    const scriptDrag = await browserDrag(A, A.getByRole('button', {name: /^(Drag selected script|選択したスクリプトをドラッグ)$/}));
+    assert(scriptDrag.items.some(item => item.mimeType === blockType || item.mimeType === 'text/plain'));
+    assert.equal(await scripts(B), 1);
+    await B.bringToFront();
+    await browserDrop(B, B.locator('.blocklySvg').first(), scriptDrag);
+    await expectEventually('one additional script arrived by drop', async () => await scripts(B) === 2);
+    assert.equal(await scripts(A), 1);
+    t.diagnostic('Block drag data imported once without modifying the source project.');
+
+    await A.evaluate(() => { vm.runtime.extensionStorage.twpeyamlsettings.documents.settings = 'volume: 75\nmode: production\n# D4 source\n'; });
+    await A.bringToFront();
+    const sourceYaml = await openYaml(A);
+    const copyYaml = sourceYaml.getByRole('button', {name: /^(Copy or drag YAML|YAML をコピー／ドラッグ)$/});
+    await copyYaml.click();
+    await expectEventually('native clipboard YAML text', () => clipboardContains(sender, '# D4 source'));
+    await B.bringToFront();
+    const destYaml = await openYaml(B);
+    const preview = destYaml.locator('textarea');
+    const committed = () => B.evaluate(() => vm.runtime.extensionStorage.twpeyamlsettings.documents.settings);
+    await destYaml.getByRole('button', {name: /^(Paste YAML|YAML を貼り付け)$/}).click();
+    await expectEventually('destination YAML draft from the clipboard', async () => (await preview.inputValue()).includes('# D4 source'));
+    assert.equal(await committed(), 'volume: 50\nmode: rehearsal\n');
+    await destYaml.getByRole('button', {name: /^(Cancel|キャンセル)$/}).click();
+    await destYaml.waitFor({state: 'hidden'});
+    assert.equal(await committed(), 'volume: 50\nmode: rehearsal\n');
+
+    t.diagnostic('The OS clipboard loaded a YAML draft, and Cancel preserved the project.');
+
+    await A.bringToFront();
+    const yamlDrag = await browserDrag(A, copyYaml);
+    const yamlPlain = yamlDrag.items.filter(item => item.mimeType === 'text/plain');
+    assert.equal(yamlPlain.length, 1);
+    assert.equal(JSON.parse(yamlPlain[0].data).format, 'turbowarp-yaml');
+    await B.bringToFront();
+    const reopen = await openYaml(B);
+    const yamlText = reopen.locator('textarea');
+    const invalid = {items: [{mimeType: yamlType,
+      data: JSON.stringify({format: 'turbowarp-yaml', version: 1, source: 'volume: 150\nmode: production\n'})}], dragOperationsMask: 1};
+    await browserDrop(B, yamlText, invalid);
+    await expectEventually('invalid YAML rejected by the destination schema', async () =>
+      (await reopen.locator('.twpe-yaml-error').textContent()).includes('JSON Schema validation failed'));
+    assert.equal(await committed(), 'volume: 50\nmode: rehearsal\n');
+    await browserDrop(B, yamlText, {...yamlDrag, items: yamlPlain});
+    await expectEventually('the destination YAML draft arrived by drop', async () => (await yamlText.inputValue()).includes('# D4 source'));
+    await reopen.locator('.twpe-yaml-save').click();
+    await expectEventually('the destination provider committed YAML', async () => (await committed()).includes('# D4 source'));
+    assert.equal(await A.evaluate(() => vm.runtime.extensionStorage.twpeyamlsettings.documents.settings),
+      'volume: 75\nmode: production\n# D4 source\n');
+    t.diagnostic('YAML drop rejected invalid schema data and imported the JSON text fallback.');
+    assert.equal(await B.evaluate(() => localStorage.getItem('tw-plus-script-clipboard-v1')), null);
+
+    await B.evaluate(() => {
+      const input = document.createElement('input');
+      input.id = 'd4-ordinary-text';
+      document.body.append(input);
+      input.focus();
+    });
+    execFileSync('pbcopy', {input: 'D4 ordinary clipboard text'});
+    await B.keyboard.press('Meta+v');
+    await expectEventually('plain OS clipboard text retained native paste behavior', async () =>
+      await B.locator('#d4-ordinary-text').inputValue() === 'D4 ordinary clipboard text');
+  } catch (error) {
+    t.diagnostic((await fs.readFile(logPath, 'utf8')).slice(-6000));
+    throw error;
+  }
+});

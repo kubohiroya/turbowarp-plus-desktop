@@ -22,6 +22,7 @@ const ExtensionDocumentationWindow = require('./extension-documentation.js');
 const SecurityPromptWindow = require('./security-prompt');
 const projectProcess = require('../project-process');
 const {isSB3} = require('../project-lock');
+const {projectJSONTransfer} = require('../../config/feature-flags');
 
 const TYPE_FILE = 'file';
 const TYPE_URL = 'url';
@@ -622,6 +623,9 @@ class EditorWindow extends ProjectRunningWindow {
     });
 
     this.ipc.on('project-process-mode', event => { event.returnValue = projectProcess.worker; });
+    this.ipc.on('project-json-transfer-enabled', event => {
+      event.returnValue = projectProcess.worker && projectJSONTransfer;
+    });
     this.ipc.handle('open-dropped-projects', (event, files) => {
       if (projectProcess.worker && Array.isArray(files) && files.length &&
           files.every(file => typeof file === 'string' && /\.(sb3|sb2|sb)$/i.test(file) && path.isAbsolute(file))) {
