@@ -62,7 +62,7 @@ test_id = "io.github.kubohiroya.turbowarpplus.desktop.d3-test"
 info["CFBundleIdentifier"] = test_id
 info.pop("CFBundleDocumentTypes", None)
 info.pop("CFBundleURLTypes", None)
-subprocess.run(["/bin/cp", "-cR", str(source), str(output)], check=True)
+subprocess.run(["/usr/bin/ditto", str(source), str(output)], check=True)
 (output / asar_path).write_bytes(struct.pack("<II", 4, len(pickle)) + pickle + data)
 (output / info_path).write_bytes(plistlib.dumps(info))
 for helper_path in (output / "Contents/Frameworks").glob("*.app/Contents/Info.plist"):
