@@ -44,4 +44,6 @@ TW_PLUS_TEST_EDITOR_CHECKOUT=/absolute/path/to/editor TW_PLUS_TEST_SB3="$work/fi
   node --test test/editor-popouts.macos.test.js
 ```
 
-実 Electron の BrowserWindow を非表示で起動し、OS のフォーカスを切り替えずに確認する。配信された renderer のリビジョン、既定 OFF、予約なしの別窓、サブフレーム、無効・別種別・使用済みのチケット、各画面の UI からの起動、子の隔離とナビゲーション拒否、コード別窓の予約上限、親の再読み込みによる終了を検証する。画面表示、OS のフォーカス、最大化・最小化・復元の表示結果、コード別窓の複製操作は画面付きの検証で扱う。
+実 Electron の BrowserWindow を非表示で起動し、OS のフォーカスを切り替えずに確認する。配信された renderer のリビジョン、既定 OFF、予約なしの別窓、サブフレーム、無効・別種別・使用済みのチケット、各画面の UI からの起動、子の隔離とナビゲーション拒否、コード別窓の予約上限、親の再読み込みによる終了を検証する。
+
+画面付きで確認する場合は、起動前に Editor のリモート `main`、`config/plus-renderer.json` の固定先、使用する `build-info.json` のリビジョンを照合する。上記のコマンドに `TW_PLUS_TEST_SHOW_WINDOWS=1` を追加すると、通常の Desktop エントリーポイントから実ウィンドウを表示する。親子のフォーカス切り替え、Electron の最大化・最小化とそれぞれの復元イベント、コード別窓の「もう一枚開く」と2枚の上限を検証する。

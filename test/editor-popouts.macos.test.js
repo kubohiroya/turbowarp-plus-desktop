@@ -9,6 +9,7 @@ const {test} = require('node:test');
 
 const editor = process.env.TW_PLUS_TEST_EDITOR_CHECKOUT;
 const fixture = process.env.TW_PLUS_TEST_SB3;
+const headed = process.env.TW_PLUS_TEST_SHOW_WINDOWS === '1';
 const repo = path.resolve(__dirname, '..');
 const kinds = ['backpack', 'stage', 'sprite-list', 'sprite-properties', 'code'];
 const layoutLabel = /^(Window layout|レイアウト変更)$/;
@@ -44,10 +45,11 @@ test('editor popouts require a reservation and isolate each child', {
         if (popout) env[key] = '1';
         else delete env[key];
       }
+      const entrypoint = headed ? path.join(repo, 'src-main/entrypoint.js') : path.join(__dirname, 'editor-popouts-app.js');
       const app = await _electron.launch({
         executablePath,
         cwd: repo,
-        args: [path.join(__dirname, 'editor-popouts-app.js'), fixture],
+        args: [entrypoint, fixture],
         env
       });
       try {
@@ -59,7 +61,8 @@ test('editor popouts require a reservation and isolate each child', {
         const servedRevision = await page.evaluate(async () => (await (await fetch('build-info.json')).json()).editorRevision);
         assert.equal(servedRevision, editorRevision);
         const window = await app.browserWindow(page);
-        assert.equal(await window.evaluate(win => win.isVisible() || win.isFocused()), false);
+        assert.equal(await window.evaluate(win => win.isVisible()), headed);
+        if (!headed) assert.equal(await window.evaluate(win => win.isFocused()), false);
         await verify(app, page);
       } finally {
         await app.close();
@@ -118,6 +121,41 @@ test('editor popouts require a reservation and isolate each child', {
       await child.waitForFunction(() => window.opener === null && document.querySelector('#mount')?.children.length);
       return child;
     };
+    const focusWindow = async (target, browserWindow) => {
+      await browserWindow.evaluate(window => {
+        window.focus();
+        window.webContents.focus();
+      });
+      await target.waitForFunction(() => document.hasFocus(), null, {polling: 100});
+      assert.equal(await browserWindow.evaluate(window => window.isFocused()), true);
+    };
+    const verifyWindowControls = async (child, childWindow) => {
+      await child.waitForFunction(() => document.hasFocus(), null, {polling: 100});
+      assert.equal(await childWindow.evaluate(window => window.isFocused()), true);
+      await focusWindow(page, await app.browserWindow(page));
+      assert.equal(await childWindow.evaluate(window => window.isFocused()), false);
+      await focusWindow(child, childWindow);
+
+      const change = async (action, event, mode) => {
+        await childWindow.evaluate((window, event) => {
+          globalThis.popoutWindowState = new Promise(resolve => {
+            const timeout = setTimeout(() => resolve(null), 4000);
+            window.once(event, () => {
+              clearTimeout(timeout);
+              resolve([window.isMaximized(), window.isMinimized()]);
+            });
+          });
+        }, event);
+        await child.evaluate(action => TwPlusWindowControls.change(action), action);
+        assert.deepEqual(await app.evaluate(() => globalThis.popoutWindowState),
+          [mode === 'maximized', mode === 'minimized'], `Native state after ${event}`);
+      };
+      await change('maximize', 'maximize', 'maximized');
+      await change('restore', 'unmaximize', 'normal');
+      await change('minimize', 'minimize', 'minimized');
+      await change('restore', 'restore', 'normal');
+      assert.equal(await childWindow.evaluate(window => window.isVisible()), true);
+    };
     const verifyChild = async (kind, child) => {
       assert.deepEqual(await child.evaluate(() => ({
         node: typeof window.require,
@@ -130,10 +168,15 @@ test('editor popouts require a reservation and isolate each child', {
       const childWindow = await app.browserWindow(child);
       assert.deepEqual(await childWindow.evaluate(window => {
         const {nodeIntegration, contextIsolation, sandbox, webSecurity} = window.webContents.getLastWebPreferences();
-        return {nodeIntegration, contextIsolation, sandbox, webSecurity, visible: window.isVisible(), focused: window.isFocused()};
+        return {nodeIntegration, contextIsolation, sandbox, webSecurity, visible: window.isVisible()};
       }), {
-        nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, visible: false, focused: false
+        nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, visible: headed
       });
+      if (headed) {
+        await verifyWindowControls(child, childWindow);
+      } else {
+        assert.equal(await childWindow.evaluate(window => window.isFocused()), false);
+      }
       const ticket = new URL(child.url()).hash.slice(1);
       assert.equal(await page.evaluate(name => window.open('about:blank', name) !== null, `tw-plus-${kind}-${ticket}`), false);
       assert.equal(await child.evaluate(() => window.open('about:blank') !== null), false);
@@ -197,8 +240,33 @@ test('editor popouts require a reservation and isolate each child', {
       await press(openLabel);
     });
     await verifyChild('code', child);
-    assert.deepEqual(await page.evaluate(tickets => tickets.map(ticket => EditorPreload.reservePopout('code', ticket)),
-      [randomUUID(), randomUUID()]), [true, false]);
+    if (headed) {
+      await focusWindow(child, await app.browserWindow(child));
+      const duplicate = target => target.getByRole('menuitem', {
+        name: /^(Open another view of this editor|この編集画面をもう一枚開く（別のビューを開く）)$/
+      });
+      await child.waitForFunction(() => Boolean(document.querySelector('#code-target')?.value));
+      const target = await child.locator('#code-target').inputValue();
+      const second = await open('code', async () => {
+        await press(layoutLabel, child);
+        assert.equal(await duplicate(child).isEnabled(), true);
+        await click(duplicate(child));
+      });
+      assert.notEqual(second.url(), child.url());
+      await second.waitForFunction(target => document.querySelector('#code-target')?.value === target, target);
+      await verifyChild('code', second);
+      await press(layoutLabel, second);
+      assert.equal(await duplicate(second).isDisabled(), true);
+      assert.equal(await page.evaluate(ticket => EditorPreload.reservePopout('code', ticket), randomUUID()), false);
+      const dock = second.getByRole('menuitem', {name: /Return to the editor|元の画面に戻す/});
+      await Promise.all([second.waitForEvent('close'), click(dock)]);
+      await focusWindow(child, await app.browserWindow(child));
+      await press(layoutLabel, child);
+      assert.equal(await duplicate(child).isEnabled(), true);
+    } else {
+      assert.deepEqual(await page.evaluate(tickets => tickets.map(ticket => EditorPreload.reservePopout('code', ticket)),
+        [randomUUID(), randomUUID()]), [true, false]);
+    }
     await Promise.all([child.waitForEvent('close'), page.reload()]);
     assert.equal(app.windows().length, 1);
   });
