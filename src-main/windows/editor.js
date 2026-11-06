@@ -22,6 +22,8 @@ const ExtensionDocumentationWindow = require('./extension-documentation.js');
 const SecurityPromptWindow = require('./security-prompt');
 const projectProcess = require('../project-process');
 const {isSB3} = require('../project-lock');
+const {ExternalYamlFiles} = require('../external-yaml-files');
+const {projectJSONTransfer, projectAssetTransfer, externalYaml} = require('../../config/feature-flags');
 
 const TYPE_FILE = 'file';
 const TYPE_URL = 'url';
@@ -622,6 +624,54 @@ class EditorWindow extends ProjectRunningWindow {
     });
 
     this.ipc.on('project-process-mode', event => { event.returnValue = projectProcess.worker; });
+    this.ipc.on('project-json-transfer-enabled', event => {
+      event.returnValue = projectProcess.worker && projectJSONTransfer;
+    });
+    const yamlEnabled = projectProcess.worker && externalYaml;
+    this.ipc.on('external-yaml-enabled', event => { event.returnValue = yamlEnabled; });
+    if (yamlEnabled) {
+      const yaml = new ExternalYamlFiles(projectProcess.yamlFiles);
+      let selectingYaml = false;
+      this.ipc.handle('open-external-yaml', async () => {
+        if (selectingYaml) return null;
+        selectingYaml = true;
+        try {
+          return await yaml.open(async () => {
+            const result = await dialog.showOpenDialog(this.window, {
+              properties: ['openFile'],
+              defaultPath: settings.lastDirectory,
+              filters: [{name: 'YAML', extensions: ['yaml', 'yml']}]
+            });
+            return result.canceled ? null : result.filePaths[0];
+          });
+        } finally {
+          selectingYaml = false;
+        }
+      });
+      this.ipc.handle('save-external-yaml', (event, id, revision, source) => yaml.save(id, revision, source));
+      this.ipc.handle('close-external-yaml', (event, id) => yaml.close(id));
+      this.window.webContents.on('did-navigate', () => {
+        void yaml.closeAll().catch(error => console.error(error.message));
+      });
+    }
+    const assetsEnabled = projectProcess.worker && projectAssetTransfer;
+    this.ipc.on('project-asset-transfer-enabled', event => { event.returnValue = assetsEnabled; });
+    if (assetsEnabled) {
+      let pending = false;
+      const oneAssetOperation = handler => async (event, ...args) => {
+        if (pending) throw new Error('A project asset transfer is already running.');
+        pending = true;
+        try {
+          return await handler(...args);
+        } finally {
+          pending = false;
+        }
+      };
+      this.ipc.handle('stage-transfer-asset', oneAssetOperation(projectProcess.stageTransferAsset));
+      this.ipc.handle('read-transfer-asset', oneAssetOperation(async (transferId, asset) =>
+        new Uint8Array(await projectProcess.readTransferAsset(transferId, asset))));
+      this.ipc.handle('discard-transfer-asset', oneAssetOperation(projectProcess.discardTransferAsset));
+    }
     this.ipc.handle('open-dropped-projects', (event, files) => {
       if (projectProcess.worker && Array.isArray(files) && files.length &&
           files.every(file => typeof file === 'string' && /\.(sb3|sb2|sb)$/i.test(file) && path.isAbsolute(file))) {
