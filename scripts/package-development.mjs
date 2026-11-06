@@ -8,14 +8,16 @@ import {Arch, build, Platform} from 'electron-builder';
 
 const desktop = path.resolve(import.meta.dirname, '..');
 const [target, arch, sourceFile] = process.argv.slice(2);
-const platformTargets = {
-  darwin: ['dmg', 'arm64', '.dmg'],
-  win32: ['nsis', 'x64', '.exe'],
-  linux: ['AppImage', 'x64', '.AppImage']
-};
-const [expectedTarget, expectedArch, extension] = platformTargets[process.platform] ?? [];
-assert.ok(expectedTarget && target === expectedTarget && arch === expectedArch && arch === process.arch && sourceFile,
-  'Usage: node scripts/package-development.mjs <dmg arm64|nsis x64|AppImage x64> <Editor site/source.json> on the matching host');
+const targets = new Map([
+  ['dmg', {platform: Platform.MAC, arch: 'arm64', extension: '.dmg', hosts: ['darwin']}],
+  ['nsis', {platform: Platform.WINDOWS, arch: 'x64', extension: '.exe', hosts: ['win32', 'linux']}],
+  ['AppImage', {platform: Platform.LINUX, arch: 'x64', extension: '.AppImage', hosts: ['linux']}]
+]);
+const selected = targets.get(target);
+assert.ok(selected?.hosts.includes(process.platform) && arch === selected.arch && arch === process.arch && sourceFile,
+  'Usage: node scripts/package-development.mjs <dmg arm64|nsis x64|AppImage x64> <Editor site/source.json> on a supported host');
+const {platform, extension} = selected;
+const crossBuild = platform.nodeName !== process.platform;
 
 const readJson = async filename => JSON.parse(await fs.readFile(filename, 'utf8'));
 const output = path.join(desktop, 'dist/development-package');
@@ -41,15 +43,20 @@ assert.equal(git('status', '--porcelain', '--untracked-files=no'), '', 'Package 
 
 const builtFiles = await build({
   projectDir: desktop,
-  targets: Platform.current().createTarget(target, Arch[arch]),
+  targets: platform.createTarget(target, Arch[arch]),
   publish: 'never',
   config: {
     directories: {output},
     extraMetadata: {tw_dist: 'development-artifact', tw_update: false},
     mac: {identity: null, notarize: false},
     win: {signExecutable: false},
+    ...(crossBuild && {npmRebuild: false}),
     afterPack: ({appOutDir, packager}) => {
       const archive = path.join(packager.getResourcesDir(appOutDir), 'app.asar');
+      if (crossBuild) {
+        assert.ok(!asar.listPackage(archive).some(filename => filename.endsWith('.node')),
+          'Cross-packaging requires JavaScript-only runtime dependencies');
+      }
       const embedded = asar.extractFile(archive, `${rendererPath}/build-info.json`);
       assert.deepEqual(JSON.parse(embedded.toString('utf8')), buildInfo, 'Packaged renderer metadata differs');
       asar.statFile(archive, `${rendererPath}/gui.html`);
@@ -61,7 +68,7 @@ const builtFiles = await build({
 const artifacts = builtFiles.filter(filename => path.extname(filename) === extension);
 assert.equal(artifacts.length, 1, `Expected one ${extension} artifact from electron-builder`);
 const [artifact] = artifacts;
-const name = `TurboWarp-Plus-Desktop-development-${buildInfo.desktopVersion}-${process.platform}-${arch}${extension}`;
+const name = `TurboWarp-Plus-Desktop-development-${buildInfo.desktopVersion}-${platform.nodeName}-${arch}${extension}`;
 const hash = createHash('sha256');
 for await (const chunk of createReadStream(artifact)) hash.update(chunk);
 

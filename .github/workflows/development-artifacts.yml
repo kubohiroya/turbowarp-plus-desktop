@@ -21,27 +21,28 @@ permissions:
 
 jobs:
   package:
-    name: ${{ matrix.runner }} / ${{ matrix.target }}
+    name: ${{ matrix.os }} / ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
+          - os: macos
+            runner: macos-15
             arch: arm64
             target: dmg
-          - runner: windows-2025
+          - os: windows
+            runner: ubuntu-24.04
             arch: x64
             target: nsis
-          - runner: ubuntu-24.04
+          - os: linux
+            runner: ubuntu-24.04
             arch: x64
             target: AppImage
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       GIT_TERMINAL_PROMPT: '0'
-      NPM_CONFIG_FOREGROUND_SCRIPTS: ${{ matrix.runner == 'windows-2025' && 'true' || 'false' }}
-      NPM_CONFIG_LOGLEVEL: ${{ matrix.runner == 'windows-2025' && 'verbose' || 'notice' }}
     defaults:
       run:
         shell: bash
@@ -50,7 +51,6 @@ jobs:
         run: |
           git config --global --add url.https://github.com/.insteadOf ssh://git@github.com/
           git config --global --add url.https://github.com/.insteadOf git@github.com:
-          if [[ "$RUNNER_OS" == "Windows" ]]; then git config --global core.longpaths true; fi
       - uses: actions/checkout@v4
         with:
           path: desktop
@@ -99,15 +99,27 @@ jobs:
           npm run fetch
           npm run webpack:prod
           npm run webpack:plus -- ../editor ../scratch-gui
+      - name: Install Wine for the NSIS uninstaller build
+        if: matrix.target == 'nsis'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 wine32:i386 xvfb xauth
       - name: Package and verify the development artifact
         working-directory: desktop
         env:
           TARGET: ${{ matrix.target }}
           ARCH: ${{ matrix.arch }}
-        run: node scripts/package-development.mjs "$TARGET" "$ARCH" ../editor/site/source.json
+        run: |
+          package=(node scripts/package-development.mjs "$TARGET" "$ARCH" ../editor/site/source.json)
+          if [[ "$TARGET" == "nsis" ]]; then
+            xvfb-run -a "${package[@]}"
+          else
+            "${package[@]}"
+          fi
       - uses: actions/upload-artifact@v4
         with:
-          name: desktop-development-${{ matrix.runner }}-${{ matrix.arch }}-${{ matrix.target }}
+          name: desktop-development-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.target }}
           path: desktop/dist/development-artifact/
           if-no-files-found: error
           retention-days: 14
