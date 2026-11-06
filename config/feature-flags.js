@@ -1,4 +1,5 @@
 exports.plusRenderer = process.env.TW_PLUS_DESKTOP_RENDERER === '1';
+exports.backpackPopout = exports.plusRenderer && process.env.TW_PLUS_DESKTOP_BACKPACK_POPOUT === '1';
 exports.projectIsolation = process.env.TW_PLUS_DESKTOP_PROJECT_ISOLATION === '1';
 exports.projectJSONTransfer = process.env.TW_PLUS_DESKTOP_JSON_TRANSFER === '1';
 exports.projectAssetTransfer = exports.projectJSONTransfer && process.env.TW_PLUS_DESKTOP_ASSET_TRANSFER === '1';
