@@ -73,6 +73,11 @@ test('editor popouts require a reservation and isolate each child', {
   };
 
   await launch(false, async (app, page) => {
+    const pin = page.getByRole('button', {name: /^(Pin sprite list|スプライト一覧を固定表示)$/});
+    await pin.waitFor({state: 'visible'});
+    assert.equal(await pin.getAttribute('aria-pressed'), 'true');
+    await page.locator('[data-backdrop-placement] img').first().waitFor({state: 'visible'});
+    await page.getByRole('button', {name: /^(Reveal sprite list|スプライト一覧を展開)$/}).waitFor({state: 'hidden'});
     assert.equal(await page.evaluate(() => typeof EditorPreload.reservePopout), 'undefined');
     for (const kind of kinds) assert.equal(await opens(page, kind), false);
     assert.equal(app.windows().length, 1);
@@ -195,6 +200,9 @@ test('editor popouts require a reservation and isolate each child', {
       assert.equal(await app.evaluate(() => globalThis.blockedChildNavigation), true);
     };
 
+    await press(/Layout options|配置メニュー/);
+    await click(page.getByRole('menuitemcheckbox', {name: /Show undock buttons|アンドックボタンを表示/}));
+
     const backpack = await open('backpack', async () => {
       await press(/Reveal Backpack|バックパックを展開/);
       await press(/Undock Backpack|バックパックを別画面で開く/);
@@ -212,19 +220,14 @@ test('editor popouts require a reservation and isolate each child', {
     await verifyChild('stage', stage);
     await stage.close();
 
-    const revealSprites = /Reveal sprite list|スプライト一覧を展開/;
     const list = await open('sprite-list', async () => {
-      await reveal(revealSprites);
       await press(/^(Undock sprite list|アンドック)$/);
       await internalToExternal(/^(Sprite list|スプライト一覧)$/)();
     });
     await verifyChild('sprite-list', list);
     await list.close();
 
-    await press(/Layout options|配置メニュー/);
-    await click(page.getByRole('menuitemcheckbox', {name: /Show undock buttons|アンドックボタンを表示/}));
     const properties = await open('sprite-properties', async () => {
-      await reveal(revealSprites);
       const toggle = button(/^(Sprite|スプライト)$/);
       await click(toggle);
       await press(openLabel, toggle.locator('..'));
@@ -234,10 +237,9 @@ test('editor popouts require a reservation and isolate each child', {
     await properties.close();
 
     const child = await open('code', async () => {
-      await button(revealSprites).dispatchEvent('keydown', {key: 'Escape'});
       const tab = page.getByRole('tab', {name: /^(Code|コード)$/});
       await tab.focus();
-      await press(openLabel);
+      await press(openLabel, page.getByRole('tabpanel', {name: 'Sprite1', exact: true}));
     });
     await verifyChild('code', child);
     if (headed) {
