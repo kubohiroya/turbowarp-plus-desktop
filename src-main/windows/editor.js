@@ -25,7 +25,8 @@ const SecurityPromptWindow = require('./security-prompt');
 const projectProcess = require('../project-process');
 const {isSB3} = require('../project-lock');
 const {ExternalYamlFiles} = require('../external-yaml-files');
-const {plusRenderer, projectJSONTransfer, projectAssetTransfer, externalYaml, workspaceLayout} =
+const {installEditorPopouts, isReservedPopout} = require('./editor-popouts');
+const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml, workspaceLayout} =
   require('../../config/feature-flags');
 
 const rendererDirectory = plusRenderer ? 'plus-gui' : 'gui';
@@ -34,6 +35,7 @@ if (plusRenderer) {
   const buildInfoPath = path.join(rendererRoot, 'build-info.json');
   if (!existsSync(buildInfoPath) || !existsSync(path.join(rendererRoot, 'gui.html')) ||
       !existsSync(path.join(rendererRoot, 'addons.html')) ||
+      [...editorPopouts].some(kind => !existsSync(path.join(rendererRoot, `${kind}-popout.html`))) ||
       require(buildInfoPath).editorRevision !== require('../../config/plus-renderer.json').editorRevision) {
     throw new Error('The pinned Plus renderer is missing or out of date. Run npm run webpack:plus before enabling it.');
   }
@@ -726,7 +728,12 @@ class EditorWindow extends ProjectRunningWindow {
       this.isInEditorFullScreen = !!isFullScreen;
     });
 
-    this.loadURL(`tw-editor://./${rendererDirectory}/gui.html`);
+    const editorURL = new URL(`tw-editor://./${rendererDirectory}/gui.html`);
+    this.ipc.on('editor-popouts-enabled', event => { event.returnValue = editorPopouts.size > 0; });
+    if (editorPopouts.size) {
+      this.handleEditorPopout = installEditorPopouts(this, editorURL, editorPopouts);
+    }
+    this.loadURL(editorURL.href);
     this.show();
   }
 
@@ -764,6 +771,10 @@ class EditorWindow extends ProjectRunningWindow {
   }
 
   handleWindowOpen (details) {
+    if (isReservedPopout(details.frameName)) {
+      return this.handleEditorPopout?.(details) ?? {action: 'deny'};
+    }
+
     const url = new URL(details.url);
     const params = new URLSearchParams(url.search);
 

@@ -1,6 +1,9 @@
 const {contextBridge, ipcRenderer} = require('electron');
 
 contextBridge.exposeInMainWorld('EditorPreload', {
+  ...(ipcRenderer.sendSync('editor-popouts-enabled') === true && {
+    reservePopout: (kind, ticket) => ipcRenderer.sendSync('reserve-editor-popout', kind, ticket)
+  }),
   workspaceLayout: ipcRenderer.sendSync('workspace-layout-enabled') === true ? {
     read: () => ipcRenderer.sendSync('read-workspace-layout'),
     write: raw => { ipcRenderer.sendSync('write-workspace-layout', raw); }
