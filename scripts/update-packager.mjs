@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as pathUtil from 'node:path';
 import { computeSHA256, persistentFetch } from './lib.mjs';
+import {patchPackagerPreview} from './patch-packager-preview.mjs';
 
 const run = async () => {
   const releases = await (await persistentFetch('https://api.github.com/repos/TurboWarp/packager/releases')).json();
@@ -10,13 +11,16 @@ const run = async () => {
   const packagerBuffer = await (await persistentFetch(packagerURL)).arrayBuffer();
 
   const sha256 = computeSHA256(packagerBuffer);
+  const desktop = Buffer.from(patchPackagerPreview(Buffer.from(packagerBuffer).toString('utf8')));
+  const desktopSha256 = computeSHA256(desktop);
   console.log(`SHA-256: ${sha256}`);
 
   fs.writeFileSync(pathUtil.join(import.meta.dirname, 'packager.json'), JSON.stringify({
     src: packagerURL,
     sha256,
+    desktopSha256,
   }, null, 2));
-  console.log('This has only updated metadata; you still need to actually download the packager with download-packager.js');
+  console.log('This has only updated metadata; you still need to actually download the packager with download-packager.mjs');
 };
 
 run()

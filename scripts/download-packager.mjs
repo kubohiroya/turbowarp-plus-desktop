@@ -2,43 +2,38 @@ import * as fs from 'node:fs';
 import * as pathUtil from 'node:path';
 import { computeSHA256, persistentFetch } from './lib.mjs';
 import packagerInfo from './packager.json' with { type: 'json' };
+import {patchPackagerPreview} from './patch-packager-preview.mjs';
 
 const path = pathUtil.join(import.meta.dirname, '../src-renderer/packager/standalone.html');
 
-const isAlreadyDownloaded = () => {
+const readExisting = () => {
   try {
-    const data = fs.readFileSync(path);
-    return computeSHA256(data) === packagerInfo.sha256;
-  } catch (e) {
-    // file might not exist, ignore
+    return fs.readFileSync(path);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return null;
   }
-  return false;
 };
 
-if (!isAlreadyDownloaded()) {
-  console.log(`Downloading ${packagerInfo.src}`);
-  console.time('Download packager');
-
-  persistentFetch(packagerInfo.src)
-    .then((res) => res.arrayBuffer())
-    .then((buffer) => {
-      const sha256 = computeSHA256(buffer);
-      if (packagerInfo.sha256 !== sha256) {
-        throw new Error(`Hash mismatch: expected ${packagerInfo.sha256} but found ${sha256}`);
-      }
-
-      fs.mkdirSync(pathUtil.dirname(path), {
-        recursive: true
-      });
-      fs.writeFileSync(path, new Uint8Array(buffer));
-    })
-    .then(() => {
-      process.exit(0);
-    })  
-    .catch((err) => {
-      console.error(err);
-      process.exit(1);
-    });
-} else {
+const existing = readExisting();
+const existingHash = existing && computeSHA256(existing);
+if (existingHash === packagerInfo.desktopSha256) {
   console.log('Packager already updated');
+} else {
+  let upstream = existing;
+  if (existingHash !== packagerInfo.sha256) {
+    console.log(`Downloading ${packagerInfo.src}`);
+    upstream = Buffer.from(await (await persistentFetch(packagerInfo.src)).arrayBuffer());
+  }
+  const upstreamHash = computeSHA256(upstream);
+  if (upstreamHash !== packagerInfo.sha256) {
+    throw new Error(`Packager hash mismatch: expected ${packagerInfo.sha256} but found ${upstreamHash}`);
+  }
+  const desktop = Buffer.from(patchPackagerPreview(upstream.toString('utf8')));
+  const desktopHash = computeSHA256(desktop);
+  if (desktopHash !== packagerInfo.desktopSha256) {
+    throw new Error(`Desktop Packager hash mismatch: expected ${packagerInfo.desktopSha256} but found ${desktopHash}`);
+  }
+  fs.mkdirSync(pathUtil.dirname(path), {recursive: true});
+  fs.writeFileSync(path, desktop);
 }
