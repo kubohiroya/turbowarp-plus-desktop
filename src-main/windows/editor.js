@@ -23,7 +23,7 @@ const SecurityPromptWindow = require('./security-prompt');
 const projectProcess = require('../project-process');
 const {isSB3} = require('../project-lock');
 const {ExternalYamlFiles} = require('../external-yaml-files');
-const {projectJSONTransfer, projectAssetTransfer, externalYaml} = require('../../config/feature-flags');
+const {projectJSONTransfer, projectAssetTransfer, externalYaml, workspaceLayout} = require('../../config/feature-flags');
 
 const TYPE_FILE = 'file';
 const TYPE_URL = 'url';
@@ -627,6 +627,19 @@ class EditorWindow extends ProjectRunningWindow {
     this.ipc.on('project-json-transfer-enabled', event => {
       event.returnValue = projectProcess.worker && projectJSONTransfer;
     });
+    const workspaceEnabled = projectProcess.worker && workspaceLayout;
+    this.ipc.on('workspace-layout-enabled', event => { event.returnValue = workspaceEnabled; });
+    if (workspaceEnabled) {
+      this.ipc.on('read-workspace-layout', event => {
+        try { event.returnValue = projectProcess.workspaceLayout.read(); }
+        catch (error) { event.returnValue = null; console.error(error.message); }
+      });
+      this.ipc.on('write-workspace-layout', (event, raw) => {
+        try { projectProcess.workspaceLayout.write(raw); }
+        catch (error) { console.error(error.message); }
+        finally { event.returnValue = null; }
+      });
+    }
     const yamlEnabled = projectProcess.worker && externalYaml;
     this.ipc.on('external-yaml-enabled', event => { event.returnValue = yamlEnabled; });
     if (yamlEnabled) {
