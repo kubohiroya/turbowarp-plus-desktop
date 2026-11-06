@@ -123,7 +123,7 @@ class Settings {
   }
 
   get camera () {
-    return this.data.camera || null;
+    return typeof this.data.camera === 'string' ? this.data.camera || null : null;
   }
   set camera (camera) {
     this.data.camera = camera;
