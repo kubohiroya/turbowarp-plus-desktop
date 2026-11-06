@@ -50,7 +50,7 @@ TW_PLUS_DESKTOP_DATA_DIR="$profile_dir" TW_PLUS_DESKTOP_RENDERER=1 npm run elect
 
 ビルドは Editor の Desktop 用 webpack 設定と GUI の既存接続口を使います。Plus renderer とそのアドオン設定画面は同じ固定 GUI からビルドします。成果物の `dist-renderer-webpack/editor/plus-gui/build-info.json` に Desktop・Electron・Editor・GUI・VM の採用版を記録し、同梱パッケージとライセンスの索引を添えます。
 
-起動時にフラグを外すと標準 renderer に切り替わります。標準 renderer では、Plus 作品や内容を判定できない既存ファイルへの上書きが拒否されます。別名で新規保存するか、Plus renderer で作品を開き直してください。
+Plus renderer を同梱した配布用アプリでは、通常起動で Plus Editor が開きます。標準 renderer に切り替える場合は、`TW_PLUS_DESKTOP_RENDERER=0` を指定して起動します。標準 renderer では、Plus 作品や内容を判定できない既存ファイルへの上書きが拒否されます。別名で新規保存するか、Plus renderer で作品を開き直してください。
 
 Plus editor の別窓を検証する場合は、[Desktop の権限境界](docs/desktop-security-boundaries.md) を参照してください。
 
