@@ -28,7 +28,7 @@ data = bytearray(archive[8 + header_size:])
 paths = (
     "config/feature-flags.js", "src-main/atomic-write-stream.js", "src-main/brand.js",
     "src-main/entrypoint.js", "src-main/index.js", "src-main/project-lock.js",
-    "src-main/project-process.js", "src-main/project-assets.js", "src-main/windows/editor.js",
+    "src-main/project-process.js", "src-main/project-assets.js", "src-main/external-yaml-files.js", "src-main/windows/editor.js",
     "src-preload/editor.js",
 )
 def overlay(name, contents):
@@ -55,7 +55,10 @@ for name in paths:
 if (process.env.TW_D3_TEST_DIALOG_PATH) {
   const {dialog} = require('electron');
   const read = () => JSON.parse(require('node:fs').readFileSync(process.env.TW_D3_TEST_DIALOG_PATH, 'utf8'));
-  dialog.showOpenDialog = async () => ({canceled: false, filePaths: [read().open]});
+  dialog.showOpenDialog = async () => {
+    const file = read().open;
+    return file ? {canceled: false, filePaths: [file]} : {canceled: true, filePaths: []};
+  };
   dialog.showSaveDialog = async () => ({canceled: false, filePath: read().save});
   dialog.showErrorBox = (_, message) => console.error(message);
 }

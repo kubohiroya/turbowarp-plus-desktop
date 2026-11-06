@@ -60,8 +60,8 @@ const isAlive = pid => {
 };
 
 class ProjectBusy extends Error {
-  constructor (owner) {
-    super('This SB3 is already open in a project process.');
+  constructor (owner, message = 'This SB3 is already open in a project process.') {
+    super(message);
     this.owner = owner;
   }
 }
@@ -71,8 +71,9 @@ class ProjectBusy extends Error {
  * independently verify ownership before writing. Recovery never relies on age.
  */
 class ProjectLocks {
-  constructor (directory) {
+  constructor (directory, busyMessage) {
     this.directory = directory;
+    this.busyMessage = busyMessage;
     fs.mkdirSync(directory, {recursive: true, mode: 0o700});
   }
 
@@ -81,7 +82,7 @@ class ProjectLocks {
     const owner = read(file);
     if (!owner) return;
     if (owner.key !== identity.key) throw new Error('The project lock does not match its path.');
-    if (isAlive(owner.pid)) throw new ProjectBusy(owner);
+    if (isAlive(owner.pid)) throw new ProjectBusy(owner, this.busyMessage);
     fs.unlinkSync(file);
   }
 

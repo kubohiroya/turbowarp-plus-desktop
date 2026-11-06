@@ -266,7 +266,108 @@ async function checkAssetPanels (t, source, destination) {
   }
 }
 
-test(process.env.TW_D5_TEST_UI === 'rollback' ? 'Desktop asset tabs remain available with D5 disabled' :
+async function checkExternalYaml (t, source, destination, work, picker) {
+  const left = path.join(work, 'left');
+  const right = path.join(work, 'right');
+  await Promise.all([fs.mkdir(left), fs.mkdir(right)]);
+  const first = path.join(left, 'settings.yaml');
+  const second = path.join(right, 'settings.yaml');
+  const alias = path.join(work, 'alias.yml');
+  await fs.writeFile(first, 'marker: external-first\n');
+  await fs.writeFile(second, 'marker: external-second\n');
+  await fs.symlink(first, alias);
+  const pane = (page, number) => page.locator(
+    '.tw-plus-document-slot[data-provider-id="file"][data-document-id="' + number + '"]');
+  const tab = (page, number) => page.getByRole('tab', {name: 'settings.yaml (file / ' + number + ')', exact: true});
+  const open = async (page, file) => {
+    await fs.writeFile(picker, JSON.stringify({open: file}));
+    await page.bringToFront();
+    await page.getByText(/^(File|ファイル)$/, {exact: true}).first().click();
+    await page.getByText(/^(Open external YAML file…|外部YAMLファイルを開く…)$/, {exact: true}).click();
+  };
+  await open(source, first);
+  await pane(source, 1).locator('textarea').waitFor();
+  await open(source, first);
+  assert.equal(await tab(source, 1).count(), 1);
+  assert.equal(await tab(source, 2).count(), 0);
+  await open(source, second);
+  await pane(source, 2).locator('textarea').waitFor();
+  const leftPane = pane(source, 2);
+  const firstPane = pane(source, 1);
+  await tab(source, 1).click();
+  const firstBox = await firstPane.boundingBox();
+  assert(firstBox);
+  await tab(source, 1).dragTo(firstPane, {
+    targetPosition: {x: firstBox.width - 12, y: firstBox.height / 2}
+  });
+  await tab(source, 2).click();
+  await expectEventually('both YAML tabs are visible in separate groups', async () => {
+    if (!await leftPane.isVisible() || !await firstPane.isVisible()) return false;
+    const [one, two] = await Promise.all([firstPane.boundingBox(), leftPane.boundingBox()]);
+    return one.x >= two.x + two.width - 4;
+  });
+  const firstText = firstPane.locator('textarea');
+  const secondText = leftPane.locator('textarea');
+  await firstText.fill('marker: saved-to-external-file\n');
+  await secondText.fill('marker: [broken\n');
+  await leftPane.locator('.twpe-yaml-save').click();
+  await expectEventually('invalid YAML rejected', async () => (await leftPane.locator('.twpe-yaml-error').textContent()).length > 0);
+  assert.equal(await fs.readFile(second, 'utf8'), 'marker: external-second\n');
+  await secondText.fill('marker: unsaved-other-pane\n');
+  await firstPane.locator('.twpe-yaml-save').click();
+  await expectEventually('edited YAML saved to its original file', async () =>
+    await fs.readFile(first, 'utf8') === 'marker: saved-to-external-file\n');
+  assert.equal(await secondText.inputValue(), 'marker: unsaved-other-pane\n');
+  await expectEventually('saved tab remains open with the committed content', async () =>
+    await firstText.inputValue() === 'marker: saved-to-external-file\n');
+  t.diagnostic('Same-named YAML tabs split side by side, independently edited and saved in place.');
+
+  await open(destination, alias);
+  const busy = destination.getByRole('alertdialog');
+  await busy.waitFor();
+  assert.match(await busy.textContent(), /already open in another project window/);
+  await busy.getByRole('button', {name: 'OK', exact: true}).click();
+  assert.equal(await pane(destination, 1).count(), 0);
+  await firstText.fill('marker: stale-draft\n');
+  await fs.writeFile(first, 'marker: change-from-outside\n');
+  await firstPane.locator('.twpe-yaml-save').click();
+  await expectEventually('external edit detected at save', async () =>
+    (await firstPane.locator('.twpe-yaml-error').textContent()).includes('changed on disk'));
+  assert.equal(await firstText.inputValue(), 'marker: stale-draft\n');
+  assert.equal(await fs.readFile(first, 'utf8'), 'marker: change-from-outside\n');
+  await tab(source, 1).locator('.dv-default-tab-action').click();
+  const confirmation = source.locator('.twpe-yaml-confirmation:modal');
+  await confirmation.getByRole('button', {name: /^(Discard changes|破棄して閉じる)$/}).click();
+  await tab(source, 1).waitFor({state: 'detached'});
+  await expectEventually('YAML lease released after closing tab', async () => {
+    const locks = await fs.readdir(path.join(work, 'data', 'yaml-locks'));
+    return locks.filter(file => file.endsWith('.json')).length === 1;
+  });
+  await open(destination, alias);
+  await pane(destination, 1).locator('textarea').waitFor();
+  assert.equal(await pane(destination, 1).locator('textarea').inputValue(), 'marker: change-from-outside\n');
+  await source.bringToFront();
+  await tab(source, 2).click();
+  const upperBox = await leftPane.boundingBox();
+  assert(upperBox);
+  await tab(source, 2).dragTo(leftPane, {
+    targetPosition: {x: upperBox.width / 2, y: upperBox.height - 12}
+  });
+  await expectEventually('the second YAML tab moved into a lower split', async () =>
+    (await leftPane.boundingBox())?.y > upperBox.y + 32);
+  assert.equal(await secondText.inputValue(), 'marker: unsaved-other-pane\n');
+  const zip = require(path.join(path.dirname(process.env.TW_D4_PLAYWRIGHT), '@turbowarp/jszip'));
+  const savedBytes = await source.evaluate(async () =>
+    Array.from(new Uint8Array(await (await vm.saveProjectSb3()).arrayBuffer())));
+  const project = await zip.loadAsync(Buffer.from(savedBytes));
+  const projectJson = await project.file('project.json').async('string');
+  assert(!/saved-to-external-file|unsaved-other-pane|change-from-outside|stale-draft/.test(projectJson));
+  assert(!Object.keys(project.files).some(name => /\.ya?ml$/i.test(name)));
+  t.diagnostic('A symlink conflicted across processes, stale saves and a vertical split preserved drafts, and SB3 serialization excluded external files.');
+}
+
+test(process.env.TW_D5_TEST_EXTERNAL_YAML === '1' ? 'Desktop opens external YAML tabs with cross-project file locks' :
+  process.env.TW_D5_TEST_UI === 'rollback' ? 'Desktop asset tabs remain available with D5 disabled' :
   process.env.TW_D5_TEST_UI === '1' ? 'Desktop asset panels transfer costumes and sounds' :
   process.env.TW_D5_TEST_ASSETS === '1' ? 'Desktop project processes resolve a shared binary asset' :
   'two Desktop projects transfer scripts and YAML via the OS clipboard and cross-process drag data', {
@@ -275,6 +376,7 @@ test(process.env.TW_D5_TEST_UI === 'rollback' ? 'Desktop asset tabs remain avail
 }, async t => {
   const {chromium} = require(process.env.TW_D4_PLAYWRIGHT);
   const enabled = process.env.TW_D4_TEST_ENABLED !== '0';
+  const externalYaml = process.env.TW_D5_TEST_EXTERNAL_YAML === '1';
   const assetPanels = enabled && process.env.TW_D5_TEST_UI === '1';
   const assetRollback = enabled && process.env.TW_D5_TEST_UI === 'rollback';
   const assets = assetPanels || (enabled && process.env.TW_D5_TEST_ASSETS === '1');
@@ -286,7 +388,8 @@ test(process.env.TW_D5_TEST_UI === 'rollback' ? 'Desktop asset tabs remain avail
   const logPath = path.join(work, 'electron.log');
   const log = await fs.open(logPath, 'a');
   const snapshot = operation => execFileSync('swift', [path.join(__dirname, 'clipboard-snapshot.swift'), operation, clipboard]);
-  const usesClipboard = !assetRollback && (!assets || assetPanels);
+  const picker = path.join(work, 'picker.json');
+  const usesClipboard = !externalYaml && !assetRollback && (!assets || assetPanels);
   if (usesClipboard) snapshot('save');
   const sessions = [];
   let broker;
@@ -305,7 +408,8 @@ test(process.env.TW_D5_TEST_UI === 'rollback' ? 'Desktop asset tabs remain avail
   broker = spawn(binary, ['--remote-debugging-port=0', first, second], {
     cwd: work, stdio: ['ignore', log.fd, log.fd], detached: true,
     env: {...process.env, TW_PLUS_DESKTOP_PROJECT_ISOLATION: '1', TW_PLUS_DESKTOP_JSON_TRANSFER: enabled ? '1' : '0',
-      TW_PLUS_DESKTOP_ASSET_TRANSFER: assets ? '1' : '0', TW_PLUS_DESKTOP_DATA_DIR: profile}
+      TW_PLUS_DESKTOP_ASSET_TRANSFER: assets ? '1' : '0', TW_PLUS_DESKTOP_EXTERNAL_YAML: externalYaml ? '1' : '0',
+      ...(externalYaml && {TW_D3_TEST_DIALOG_PATH: picker}), TW_PLUS_DESKTOP_DATA_DIR: profile}
   });
   const nameOf = page => page.evaluate(() => EditorPreload.getInitialFile()
     .then(id => EditorPreload.getFile(id)).then(file => file.name));
@@ -334,6 +438,7 @@ test(process.env.TW_D5_TEST_UI === 'rollback' ? 'Desktop asset tabs remain avail
         window.ScratchBlocks?.getMainWorkspace() && !vm.editingTarget?.isStage);
       assert.equal(await page.evaluate(() => EditorPreload.projectJSONTransfer), enabled);
       assert.equal(await page.evaluate(() => Boolean(EditorPreload.projectAssetTransfer)), assets);
+      assert.equal(await page.evaluate(() => Boolean(EditorPreload.externalYaml)), externalYaml);
       return {page, context, name: await nameOf(page)};
     }));
     const {page: A, context: sender} = pages.find(item => item.name === 'D4 Source.sb3');
@@ -347,6 +452,10 @@ test(process.env.TW_D5_TEST_UI === 'rollback' ? 'Desktop asset tabs remain avail
       const pane = B.locator('.twpe-yaml-dialog[open]');
       await pane.waitFor();
       assert.equal(await pane.getByRole('button', {name: /^(Paste YAML|YAML を貼り付け)$/}).count(), 0);
+      return;
+    }
+    if (externalYaml) {
+      await checkExternalYaml(t, A, B, work, picker);
       return;
     }
     if (assetRollback) {

@@ -1,6 +1,11 @@
 const {contextBridge, ipcRenderer} = require('electron');
 
 contextBridge.exposeInMainWorld('EditorPreload', {
+  externalYaml: ipcRenderer.sendSync('external-yaml-enabled') === true ? {
+    open: () => ipcRenderer.invoke('open-external-yaml'),
+    save: (id, revision, source) => ipcRenderer.invoke('save-external-yaml', id, revision, source),
+    close: id => ipcRenderer.invoke('close-external-yaml', id)
+  } : null,
   projectJSONTransfer: ipcRenderer.sendSync('project-json-transfer-enabled') === true,
   projectAssetTransfer: ipcRenderer.sendSync('project-asset-transfer-enabled') === true ? {
     stage: (kind, bytes) => ipcRenderer.invoke('stage-transfer-asset', kind, bytes),
