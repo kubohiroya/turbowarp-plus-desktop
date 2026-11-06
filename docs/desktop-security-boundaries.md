@@ -38,12 +38,16 @@
 [開発手順](../README.md) に従って Plus renderer と Electron を準備する。テストは固定 Editor の checkout にインストールした Playwright を使用する。
 
 ```sh
+expected=$(git ls-remote --exit-code https://github.com/kubohiroya/turbowarp-plus-editor.git refs/heads/main | cut -f1)
+test -n "$expected" || exit 1
 work=$(mktemp -d)
 python3 test/project-process-fixture.py "$work/fixture.sb3"
-TW_PLUS_TEST_EDITOR_CHECKOUT=/absolute/path/to/editor TW_PLUS_TEST_SB3="$work/fixture.sb3" \
+E2E_EXPECT_SITE_REVISION="$expected" TW_PLUS_TEST_EDITOR_CHECKOUT=/absolute/path/to/editor TW_PLUS_TEST_SB3="$work/fixture.sb3" \
   node --test test/editor-popouts.macos.test.js
 ```
 
+起動前に、指定した Editor SHA を Desktop の固定設定、使用する checkout、実際に配信する renderer の `build-info.json` と照合する。過去版を再現する場合は、その完全な SHA を明示して結果を区別する。
+
 実 Electron の BrowserWindow を非表示で起動し、OS のフォーカスを切り替えずに確認する。配信された renderer のリビジョン、既定 OFF、予約なしの別窓、サブフレーム、無効・別種別・使用済みのチケット、各画面の UI からの起動、子の隔離とナビゲーション拒否、コード別窓の予約上限、親の再読み込みによる終了を検証する。
 
-画面付きで確認する場合は、起動前に Editor のリモート `main`、`config/plus-renderer.json` の固定先、使用する `build-info.json` のリビジョンを照合する。上記のコマンドに `TW_PLUS_TEST_SHOW_WINDOWS=1` を追加すると、通常の Desktop エントリーポイントから実ウィンドウを表示する。親子のフォーカス切り替え、Electron の最大化・最小化とそれぞれの復元イベント、コード別窓の「もう一枚開く」と2枚の上限を検証する。
+画面付きで確認する場合は、上記のコマンドに `TW_PLUS_TEST_SHOW_WINDOWS=1` を追加すると、通常の Desktop エントリーポイントから実ウィンドウを表示する。親子のフォーカス切り替え、Electron の最大化・最小化とそれぞれの復元イベント、コード別窓の「もう一枚開く」と2枚の上限を検証する。
