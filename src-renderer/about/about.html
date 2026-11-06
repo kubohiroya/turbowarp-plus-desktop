@@ -29,15 +29,17 @@
   </head>
   <body>
     <main>
-      <h1>TurboWarp Desktop <span class="version"></span></h1>
+      <h1><span class="app-name"></span> <span class="version"></span></h1>
       <p class="more-version"></p>
+      <p>Based on TurboWarp Desktop. <a class="source-link" target="_blank" rel="noreferrer">Source code and project information</a>.</p>
+      <p>TurboWarp Plus Desktop is licensed under the GNU General Public License v3.0. You can read the license below:</p>
       <script>
         var info = AboutPreload.getInfo();
+        document.querySelector('.app-name').textContent = info.name;
         document.querySelector('.version').textContent = info.version;
+        document.querySelector('.source-link').href = info.homepage;
         document.querySelector('.more-version').textContent = `(Debug info: Electron ${info.electron}, Platform ${info.platform} ${info.arch}, Distribution ${info.dist})`;
       </script>
-      <p>TurboWarp is a better offline editor for Scratch 3. Learn more at <a href="https://desktop.turbowarp.org/">https://desktop.turbowarp.org/</a>.</p>
-      <p>TurboWarp Desktop is licensed under the GNU General Public License v3.0. The source code is published <a href="https://github.com/TurboWarp/" target="_blank" rel="noreferrer">on GitHub</a>. You can read the license below:</p>
       <pre>
                     GNU GENERAL PUBLIC LICENSE
                         Version 3, 29 June 2007

@@ -1,141 +1,40 @@
-# TurboWarp Desktop
+# TurboWarp Plus Desktop
 
-TurboWarp as a desktop app.
+TurboWarp Plus Editor のデスクトップ版です。公式 [TurboWarp Desktop 1.17.1](https://github.com/TurboWarp/desktop/tree/6e7bc5934f27cd658d17bf8742db4357ae057657) を基点にしています。ライセンスは [GPL-3.0](LICENSE) です。上流には [LLK/scratch-desktop](https://github.com/LLK/scratch-desktop) に由来するコードも含まれます。
 
-If you're looking for downloads, head to: https://desktop.turbowarp.org/
+開発状況は [親 Issue](https://github.com/kubohiroya/turbowarp-plus-desktop/issues/1)、不具合は [このリポジトリの Issues](https://github.com/kubohiroya/turbowarp-plus-desktop/issues) を参照してください。製品向け配布と署名は [Desktop #9](https://github.com/kubohiroya/turbowarp-plus-desktop/issues/9) で扱います。
 
-Licensed under the GPLv3.0. See LICENSE for more information.
+## macOS での開発起動
 
-Parts of this repository are based on [LLK/scratch-desktop](https://github.com/LLK/scratch-desktop).
+Git、Node.js 24、npm を用意します。`npm ci` は `package-lock.json` に従って依存を導入します。Electron の実行ファイルは初回起動時に取得します。依存・追加資産の取得と初回起動にはネットワーク接続が必要です。
 
-## Website
-
-The website source code is in the `docs` folder.
-
-## Development
-
-We use submodules, so clone using:
-
-```bash
-git clone --recursive https://github.com/TurboWarp/desktop turbowarp-desktop
-```
-
-or run this after cloning:
-
-```bash
-git submodule init
-git submodule update
-```
-
-Install dependencies using:
-
-```bash
-npm ci
-```
-
-Then fetch extra library, packager, and extension files using:
-
-```bash
+```sh
+git clone https://github.com/kubohiroya/turbowarp-plus-desktop.git
+cd turbowarp-plus-desktop
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci
 npm run fetch
-```
-
-Repeat the three previous sets of commands every time you pull changes from GitHub.
-
-Due to the security requirements mandated by custom extensions existing, our desktop app is significantly more complicated than Scratch's.
-
- - **src-main** is what runs in Electron's main process. There is no build step; this code is included as-is. `src-main/entrypoint.js` is the entry point to the entire app.
- - **src-renderer-webpack** runs in an Electron renderer process to make the editor work. This is built by webpack as **dist-renderer-webpack**.
- - **src-renderer** also runs in an Electron renderer process, but without webpack. This is used for things like the privacy policy window.
- - **src-preload** runs as preload scripts in an Electron renderer process. They export glue functions to allow renderer and main to talk to each other in a somewhat controlled manner.
- - **dist-library-files** and **dist-extensions** contain additional static resources managed by `npm run fetch`
-
-To build the webpack portions in src-renderer-webpack for development builds, run this:
-
-```bash
 npm run webpack:compile
-```
-
-You can also run this instead for source file changes to immediately trigger rebuilds:
-
-```bash
-npm run webpack:watch
-```
-
-Once you have everything compiled and fetched, you are ready to package it up for Electron. For development, start a development Electron instance with:
-
-```bash
 npm run electron:start
 ```
 
-In Linux, The app icon won't work in the development version, but it will work in the packaged version.
+この手順は Desktop 本体の開発起動です。Plus Editor の固定 renderer を製品ホストへ統合する作業は [Desktop #3](https://github.com/kubohiroya/turbowarp-plus-desktop/issues/3) で扱います。公式アプリのローカルコピーを使う D3〜D6 の検証手順は [作品分離と排他](docs/project-process-lock.md) を参照してください。
 
-We've found that development can work pretty well if you open two terminals side-by-side and run `npm run webpack:watch` in one and `npm run electron:start` in the other. You can refresh the windows with ctrl+R or cmd+R for renderer file changes to apply, and manually restart the app for main file changes to apply.
+- `npm run fetch` は素材ライブラリ、Packager、拡張の資産を準備します。
+- `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` は開発起動に不要なテスト用 Chromium の取得を省きます。
+- `npm run webpack:watch` は renderer の開発ビルドを更新します。main や preload の変更を反映するにはアプリを再起動します。
+- `docs/screenshots` は上流の文書用サブモジュールです。スクリーンショットが必要な場合は `git submodule update --init docs/screenshots` で取得します。
 
-## Linux sandbox helper error
+## 開発プロファイル
 
-On some Linux distributions, Electron will crash with the message `The SUID sandbox helper binary was found, but is not configured correctly. Rather than run without sandboxing I'm aborting now. You need to make sure that /home/.../turbowarp-desktop/node_modules/electron/dist/chrome-sandbox is owned by root and has mode 4755.`. Notably we have seen this happen on Debian 10 and earlier and Ubuntu 24.04 and later.
+macOS の既定の保存先は `~/Library/Application Support/TurboWarp Plus Desktop` です。個別の検証では `TW_PLUS_DESKTOP_DATA_DIR` に新しいディレクトリを指定できます。
 
-For development, you can run these commands to enable unprivileged user namespaces until you reboot:
-
-```bash
-# Enable unprivileged user namespaces.
-sudo sysctl -w kernel.unprivileged_userns_clone=1
-
-# Stop AppArmor from preventing unprivileged user namespace creation by default.
-# If your distribution does not use AppArmor then you can ignore the error.
-sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```sh
+profile_dir=$(mktemp -d)
+TW_PLUS_DESKTOP_DATA_DIR="$profile_dir" npm run electron:start
 ```
 
-There are ways to make this permanent, but we don't think you should be making permanent kernel configuration changes just to develop this app. This error won't happen in the final .deb package, Flathub, or Snap Store releases.
+作品分離を試す場合は同じ起動コマンドに `TW_PLUS_DESKTOP_PROJECT_ISOLATION=1` を加えます。検証終了後にプロファイルを整理する場合は、全ウィンドウと起動係を閉じ、検証用として作成したディレクトリを確認してください。
 
-## Final production-ready builds
+## 上流への追従
 
-The development version of the app will be larger and slower than the final release builds.
-
-Build an optimized version of the webpack portions with:
-
-```bash
-npm run webpack:prod
-```
-
-Then to package up the final Electron binaries, use either our build script `release-automation/build.mjs` (see [release-automation/README.md](release-automation/README.md)) or the [electron-builder CLI](https://www.electron.build/cli). Either way the final builds are saved in the `dist` folder. Here are some examples using the electron-builder CLI directly:
-
-```bash
-# You can also do manual builds with electron-builder's CLI, for example:
-# Windows installer
-npx electron-builder --windows nsis --x64
-# macOS DMG
-npx electron-builder --mac dmg --universal
-# Linux Debian
-npx electron-builder --linux deb
-```
-
-You can typically only package for a certain operating system while on that operating system.
-
-## Code signing policy
-
-TurboWarp Desktop uses a free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
-
- * Approvers:
-   * [GarboMuffin](https://github.com/GarboMuffin)
- * Privacy policy: https://desktop.turbowarp.org/privacy.html
-
-## Advanced customizations
-
-TurboWarp Desktop lets you configure custom JS and CSS without rebuilding the app.
-
-Find TurboWarp Desktop's data path by using the list below or by clicking "?" in the top right corner, then "Desktop Settings", then "Open User Data", then opening the highlighted folder, or refer to this list:
-
- - Windows (except Microsoft Store): `%APPDATA%/turbowarp-desktop`
- - Microsoft Store: Open `%LOCALAPPDATA%/Packages`, find the folder with the word `TurboWarpDesktop` in it, then open `LocalCache/Roaming/turbowarp-desktop`
- - macOS (except Mac App Store): `~/Library/Application Support/turbowarp-desktop`
- - Mac App Store: `~/Library/Containers/org.turbowarp.desktop/Data/Library/Application Support/turbowarp-desktop` (note that the `org.turbowarp.desktop` part may appear as `TurboWarp` in Finder)
- - Linux (except Flatpak and Snap): `~/.config/turbowarp-desktop`
- - Linux (Flatpak): `~/.var/app/org.turbowarp.TurboWarp/config/turbowarp-desktop`
- - Linux (Snap): `~/snap/turbowarp-desktop/current/.config/turbowarp-desktop`
-
-Create the file `userscript.js` in this folder to configure custom JS. Create the file `userstyle.css` in this folder to configure custom CSS. Completely restart TurboWarp Desktop (including all windows) to apply.
-
-## Uninstall
-
-See https://desktop.turbowarp.org/uninstall
+[公式 TurboWarp Desktop](https://github.com/TurboWarp/desktop) の採用コミットを記録し、更新時は `package-lock.json`、同梱資産の取得元と整合性、ライセンスを確認します。Desktop の起動、プロファイル分離、作品の読み込みと保存を採用版で再確認します。

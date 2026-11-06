@@ -14,6 +14,8 @@ class AboutWindow extends AbstractWindow {
 
     this.ipc.on('get-info', (event) => {
       event.returnValue = {
+        name: APP_NAME,
+        homepage: packageJSON.homepage,
         version: packageJSON.version,
         dist: getDist(),
         electron: process.versions.electron,

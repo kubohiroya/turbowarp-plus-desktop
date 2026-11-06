@@ -49,14 +49,13 @@
       "terser-webpack-plugin": "^4.2.3"
     }
   },
-  "homepage": "https://desktop.turbowarp.org/",
+  "homepage": "https://github.com/kubohiroya/turbowarp-plus-desktop",
   "repository": {
     "type": "git",
-    "url": "https://github.com/TurboWarp/desktop.git"
+    "url": "https://github.com/kubohiroya/turbowarp-plus-desktop.git"
   },
   "bugs": {
-    "url": "https://github.com/TurboWarp/desktop/issues",
-    "email": "contact@turbowarp.org"
+    "url": "https://github.com/kubohiroya/turbowarp-plus-desktop/issues"
   },
   "main": "./src-main/entrypoint.js",
   "build": {
