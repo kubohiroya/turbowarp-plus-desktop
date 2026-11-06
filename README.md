@@ -4,6 +4,8 @@ TurboWarp Plus Editor のデスクトップ版です。公式 [TurboWarp Desktop
 
 開発状況は [親 Issue](https://github.com/kubohiroya/turbowarp-plus-desktop/issues/1)、不具合は [このリポジトリの Issues](https://github.com/kubohiroya/turbowarp-plus-desktop/issues) を参照してください。製品向け配布と署名は [Desktop #9](https://github.com/kubohiroya/turbowarp-plus-desktop/issues/9) で扱います。
 
+初回配布の対象と GitHub Actions の開発用ビルドは [配布サポート表](docs/desktop-distribution.md) を参照してください。
+
 ## macOS での開発起動
 
 Git、Node.js 24、npm を用意します。`npm ci` は `package-lock.json` に従って依存を導入します。Electron の実行ファイルは初回起動時に取得します。依存・追加資産の取得と初回起動にはネットワーク接続が必要です。

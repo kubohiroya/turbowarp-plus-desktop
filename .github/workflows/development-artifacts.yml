@@ -1,0 +1,125 @@
+name: Desktop development artifacts
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/development-artifacts.yml'
+      - 'art/**'
+      - 'build/**'
+      - 'config/**'
+      - 'docs/desktop-distribution.md'
+      - 'LICENSE'
+      - 'linux-files/**'
+      - 'package*.json'
+      - 'scripts/**'
+      - 'src-*/**'
+      - 'webpack.config.cjs'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.os }} / ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            runner: macos-15
+            arch: arm64
+            target: dmg
+          - os: windows
+            runner: ubuntu-24.04
+            arch: x64
+            target: nsis
+          - os: linux
+            runner: ubuntu-24.04
+            arch: x64
+            target: AppImage
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      GIT_TERMINAL_PROMPT: '0'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure Git for public dependencies
+        run: |
+          git config --global --add url.https://github.com/.insteadOf ssh://git@github.com/
+          git config --global --add url.https://github.com/.insteadOf git@github.com:
+      - uses: actions/checkout@v4
+        with:
+          path: desktop
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - name: Read the Desktop Editor pin
+        id: editor
+        working-directory: desktop
+        run: node -e 'const {editorRevision} = require("./config/plus-renderer.json"); if (!/^[0-9a-f]{40}$/.test(editorRevision)) throw Error("Invalid Editor pin"); require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, "revision=" + editorRevision + "\n")'
+      - uses: actions/checkout@v4
+        with:
+          repository: kubohiroya/turbowarp-plus-editor
+          ref: ${{ steps.editor.outputs.revision }}
+          path: editor
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: editor/.nvmrc
+      - name: Read the Editor GUI and VM pins
+        id: source
+        working-directory: editor
+        run: node scripts/site/source.ts
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.source.outputs.guiRepository }}
+          ref: ${{ steps.source.outputs.guiRevision }}
+          path: scratch-gui
+          persist-credentials: false
+      - name: Install locked Desktop dependencies
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+      - name: Install locked Editor dependencies
+        working-directory: editor
+        run: npm ci --no-audit --no-fund
+      - name: Install locked Scratch GUI dependencies
+        working-directory: scratch-gui
+        run: npm ci --no-audit --no-fund
+      - name: Prepare the pinned GUI
+        working-directory: scratch-gui
+        run: node scripts/prepublish.mjs
+      - name: Build the Desktop assets and renderers
+        working-directory: desktop
+        run: |
+          npm run fetch
+          npm run webpack:prod
+          npm run webpack:plus -- ../editor ../scratch-gui
+      - name: Install Wine for the NSIS uninstaller build
+        if: matrix.target == 'nsis'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 wine32:i386 xvfb xauth
+      - name: Package and verify the development artifact
+        working-directory: desktop
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          package=(node scripts/package-development.mjs "$TARGET" "$ARCH" ../editor/site/source.json)
+          if [[ "$TARGET" == "nsis" ]]; then
+            xvfb-run -a "${package[@]}"
+          else
+            "${package[@]}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-development-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.target }}
+          path: desktop/dist/development-artifact/
+          if-no-files-found: error
+          retention-days: 14
