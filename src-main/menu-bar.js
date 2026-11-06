@@ -2,6 +2,7 @@ const {Menu} = require('electron');
 const {translate} = require('./l10n');
 const openExternal = require('./open-external');
 const {APP_NAME} = require('./brand');
+const {homepage} = require('../package.json');
 const AbstractWindow = require('./windows/abstract');
 const AboutWindow = require('./windows/about');
 const DesktopSettingsWindow = require('./windows/desktop-settings');
@@ -142,7 +143,7 @@ const rebuildMenuBar = () => {
           {
             label: translate('menu.learn-more'),
             click: () => {
-              openExternal('https://desktop.turbowarp.org/')
+              openExternal(homepage);
             }
           }
         ]
