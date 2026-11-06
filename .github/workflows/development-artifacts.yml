@@ -39,6 +39,9 @@ jobs:
             target: AppImage
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      GIT_TERMINAL_PROMPT: '0'
+      NPM_CONFIG_FOREGROUND_SCRIPTS: ${{ matrix.runner == 'windows-2025' && 'true' || 'false' }}
+      NPM_CONFIG_LOGLEVEL: ${{ matrix.runner == 'windows-2025' && 'verbose' || 'notice' }}
     defaults:
       run:
         shell: bash
@@ -78,11 +81,15 @@ jobs:
           ref: ${{ steps.source.outputs.guiRevision }}
           path: scratch-gui
           persist-credentials: false
-      - name: Install locked dependencies
-        run: |
-          npm ci --prefix desktop --no-audit --no-fund
-          npm ci --prefix editor --no-audit --no-fund
-          npm ci --prefix scratch-gui --no-audit --no-fund
+      - name: Install locked Desktop dependencies
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+      - name: Install locked Editor dependencies
+        working-directory: editor
+        run: npm ci --no-audit --no-fund
+      - name: Install locked Scratch GUI dependencies
+        working-directory: scratch-gui
+        run: npm ci --no-audit --no-fund
       - name: Prepare the pinned GUI
         working-directory: scratch-gui
         run: node scripts/prepublish.mjs
