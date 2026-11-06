@@ -63,6 +63,9 @@ class DesktopSettingsWindow extends AbstractWindow {
     });
 
     this.ipc.handle('set-camera', async (event, camera) => {
+      if (camera !== null && typeof camera !== 'string') {
+        throw new TypeError('The camera ID must be a string or null.');
+      }
       settings.camera = camera;
       await settings.save();
     });

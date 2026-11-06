@@ -28,6 +28,19 @@ class AddonsWindow extends AbstractWindow {
     });
 
     this.ipc.handle('export-settings', async (event, settings) => {
+      if (typeof settings !== 'string') {
+        throw new TypeError('Add-on settings must be a JSON string.');
+      }
+      let data;
+      try {
+        data = JSON.parse(settings);
+      } catch {
+        throw new SyntaxError('Invalid add-on settings JSON.');
+      }
+      if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+        throw new TypeError('Add-on settings JSON must contain an object.');
+      }
+
       const result = await dialog.showSaveDialog(this.window, {
         defaultPath: path.join(app.getPath('downloads'), 'turbowarp-addon-settings.json'),
         filters: [
