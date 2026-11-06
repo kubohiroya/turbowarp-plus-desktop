@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const {setTimeout: delay} = require('node:timers/promises');
+const {macosTestSkip} = require('./macos-test');
 
 const blockType = 'application/x.turbowarp.blocks3+json';
 const yamlType = 'application/x.turbowarp.yaml+json';
@@ -371,7 +372,7 @@ test(process.env.TW_D5_TEST_EXTERNAL_YAML === '1' ? 'Desktop opens external YAML
   process.env.TW_D5_TEST_UI === '1' ? 'Desktop asset panels transfer costumes and sounds' :
   process.env.TW_D5_TEST_ASSETS === '1' ? 'Desktop project processes resolve a shared binary asset' :
   'two Desktop projects transfer scripts and YAML via the OS clipboard and cross-process drag data', {
-  skip: process.platform !== 'darwin' || !process.env.TW_D4_TEST_APP,
+  skip: macosTestSkip('TW_D4_TEST_APP', 'TW_D4_TEST_SB3', 'TW_D4_PLAYWRIGHT'),
   timeout: 155000
 }, async t => {
   const {chromium} = require(process.env.TW_D4_PLAYWRIGHT);

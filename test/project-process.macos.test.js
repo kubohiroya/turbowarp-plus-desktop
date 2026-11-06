@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const {setTimeout: delay} = require('node:timers/promises');
+const {macosTestSkip} = require('./macos-test');
 
 const eventually = async (label, read) => {
   const until = Date.now() + 25000;
@@ -84,7 +85,7 @@ const writeViaPreload = async (page, fileId, abort) => evaluate(page, `(async ()
 })()`);
 
 test('real Electron isolates two SB3s, prevents duplicate launch, and recovers a stale lock', {
-  skip: process.platform !== 'darwin' || !process.env.TW_D3_TEST_APP,
+  skip: macosTestSkip('TW_D3_TEST_APP', 'TW_D3_TEST_SB3'),
   timeout: 120000
 }, async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-plus-d3-profile-'));

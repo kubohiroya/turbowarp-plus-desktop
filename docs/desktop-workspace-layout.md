@@ -17,5 +17,5 @@ python3 test/prepare-project-process-app.py /Applications/TurboWarp.app "$work/T
 TW_D6_TEST_APP="$work/TurboWarp Plus D6.app" \
   TW_D6_TEST_SB3=/absolute/path/to/settings.sb3 \
   TW_D6_PLAYWRIGHT=/absolute/path/to/editor/node_modules/playwright \
-  node --test test/workspace-layout.macos.test.js
+  npm run test:macos:workspace-layout
 ```

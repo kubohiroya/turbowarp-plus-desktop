@@ -24,6 +24,18 @@ npm run electron:start
 - `npm run webpack:watch` は renderer の開発ビルドを更新します。main や preload の変更を反映するにはアプリを再起動します。
 - `docs/screenshots` は上流の文書用サブモジュールです。スクリーンショットが必要な場合は `git submodule update --init docs/screenshots` で取得します。
 
+## ローカル CI と macOS 実機テスト
+
+依存を導入した後、通常のローカル CI は `npm test` で実行します。作品ロック、素材転送、外部 YAML、標準 renderer の上書き保護、レイアウト保存を Node.js で検証します。実機テスト用の環境変数が残っていても、このコマンドから Electron が起動することはありません。
+
+Electron のウィンドウや macOS のクリップボードを使う検証は、対象を選んで実行します。各手順で指定するテスト用アプリと SB3 を先に用意してください。
+
+| コマンド | 検証手順 |
+| --- | --- |
+| `npm run test:macos:project-process` | [作品分離と排他](docs/project-process-lock.md) |
+| `npm run test:macos:project-transfer` | [作品間転送](docs/project-json-transfer.md) |
+| `npm run test:macos:workspace-layout` | [作品ごとのレイアウト復元](docs/desktop-workspace-layout.md) |
+
 ## Plus Editor renderer の組み込み
 
 `config/plus-renderer.json` の Editor コミットと、その `site/source.json` の GUI コミットを別々のクリーンな checkout に用意します。固定した Editor の `.nvmrc` の Node.js 版で両方に `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci` を実行し、GUI 側で `node scripts/prepublish.mjs` を実行します。

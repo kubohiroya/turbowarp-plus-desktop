@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const {setTimeout: delay} = require('node:timers/promises');
+const {macosTestSkip} = require('./macos-test');
 
 const eventually = async (label, read) => {
   const end = Date.now() + 30000;
@@ -99,7 +100,7 @@ async function arrange (page, stage, split, edge) {
 }
 
 test('Desktop saves two SB3s and restores each Dockview layout after restarting both project processes', {
-  skip: process.platform !== 'darwin' || !process.env.TW_D6_TEST_APP,
+  skip: macosTestSkip('TW_D6_TEST_APP', 'TW_D6_TEST_SB3', 'TW_D6_PLAYWRIGHT'),
   timeout: 190000
 }, async t => {
   const {chromium} = require(process.env.TW_D6_PLAYWRIGHT);
