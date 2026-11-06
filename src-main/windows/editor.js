@@ -33,6 +33,7 @@ if (plusRenderer) {
   const rendererRoot = path.join(__dirname, '../../dist-renderer-webpack/editor', rendererDirectory);
   const buildInfoPath = path.join(rendererRoot, 'build-info.json');
   if (!existsSync(buildInfoPath) || !existsSync(path.join(rendererRoot, 'gui.html')) ||
+      !existsSync(path.join(rendererRoot, 'addons.html')) ||
       require(buildInfoPath).editorRevision !== require('../../config/plus-renderer.json').editorRevision) {
     throw new Error('The pinned Plus renderer is missing or out of date. Run npm run webpack:plus before enabling it.');
   }

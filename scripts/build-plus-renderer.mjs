@@ -43,17 +43,19 @@ try {
     NODE_ENV: 'production',
     ROOT: '',
     E2E_GUI_ROOT: gui,
+    TW_PLUS_EDITOR_SOURCE: editor,
     TW_PLUS_DESKTOP_SOURCE: desktop,
     DISABLE_V8_COMPILE_CACHE: '1'
   };
   delete env.TW_PLUS_LOCAL_CATALOG_INPUT;
   execFileSync(process.execPath, [
     '--openssl-legacy-provider', path.join(gui, 'node_modules/webpack/bin/webpack.js'),
-    '--config', path.join(editor, 'scripts/desktop/webpack.config.cts'),
+    '--config', path.join(desktop, 'scripts/plus-renderer.webpack.cjs'),
     '--output-path', stage, '--bail'
   ], {cwd: gui, env, stdio: 'inherit'});
 
   await fs.access(path.join(stage, 'gui.html'));
+  await fs.access(path.join(stage, 'addons.html'));
   const familyNotices = await buildFamilyNotices(stage, [
     {origin: 'scratch-gui', directory: gui},
     {origin: 'turbowarp-plus-editor', directory: editor, includeDev: true}
