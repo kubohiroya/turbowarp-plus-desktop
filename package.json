@@ -1,5 +1,5 @@
 {
-  "name": "turbowarp-desktop",
+  "name": "turbowarp-plus-desktop",
   "description": "Scratch mod with a compiler, dark mode, a bunch of addons, and more.",
   "version": "1.17.1",
   "license": "GPL-3.0",
@@ -60,10 +60,11 @@
   },
   "main": "./src-main/entrypoint.js",
   "build": {
-    "appId": "org.turbowarp.desktop",
-    "productName": "TurboWarp",
+    "appId": "io.github.kubohiroya.turbowarpplus.desktop",
+    "productName": "TurboWarp Plus Desktop",
     "files": [
       "node_modules/**/*",
+      "config/feature-flags.js",
       "src-main/**/*",
       "src-preload/**/*",
       "src-renderer/**/*",
@@ -151,7 +152,7 @@
       "provisioningProfile": "build/development.provisionprofile"
     },
     "linux": {
-      "executableName": "turbowarp-desktop",
+      "executableName": "turbowarp-plus-desktop",
       "artifactName": "${productName}-${os}-${arch}-${version}.${ext}",
       "icon": "./build/",
       "synopsis": "Mod of Scratch with a compiler and more features.",

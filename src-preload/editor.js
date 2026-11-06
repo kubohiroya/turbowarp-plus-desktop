@@ -72,6 +72,19 @@ contextBridge.exposeInMainWorld('PromptsPreload', {
   confirm: (message) => ipcRenderer.sendSync('confirm', message),
 });
 
+if (ipcRenderer.sendSync('project-process-mode')) {
+  const {webUtils} = require('electron');
+  document.addEventListener('drop', event => {
+    if (!event.isTrusted) return;
+    const paths = [...event.dataTransfer.files].map(file => webUtils.getPathForFile(file))
+      .filter(path => /\.(sb3|sb2|sb)$/i.test(path));
+    if (!paths.length) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void ipcRenderer.invoke('open-dropped-projects', paths);
+  }, {capture: true});
+}
+
 // In some Linux environments, people may try to drag & drop files that we don't have access to.
 // Remove when https://github.com/electron/electron/issues/30650 is fixed.
 if (navigator.userAgent.includes('Linux')) {

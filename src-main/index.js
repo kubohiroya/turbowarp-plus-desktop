@@ -1,4 +1,5 @@
 const {app, crashReporter} = require('electron');
+const projectProcess = require('./project-process');
 const settings = require('./settings');
 
 // Enable crash reporting as early as possible to detect as many crashes as possible.
@@ -10,14 +11,13 @@ if (settings.crashDumps === 'local') {
 
 // requestSingleInstanceLock() crashes the app in signed MAS builds
 // https://github.com/electron/electron/issues/15958
-if (!process.mas && !app.requestSingleInstanceLock()) {
+if (!projectProcess.worker && !process.mas && !app.requestSingleInstanceLock()) {
   app.exit();
 }
 
 const path = require('path');
 const AbstractWindow = require('./windows/abstract');
 const EditorWindow = require('./windows/editor');
-const {checkForUpdates} = require('./update-checker');
 const {tranlateOrNull} = require('./l10n');
 const migrate = require('./migrate');
 const framelessPermissions = require('./frameless-permissions');
@@ -207,6 +207,7 @@ app.on('window-all-closed', () => {
 
 // macOS
 app.on('activate', () => {
+  if (projectProcess.worker) return;
   if (app.isReady() && !isMigrating && AbstractWindow.getWindowsByClass(EditorWindow).length === 0) {
     EditorWindow.newWindow();
   }
@@ -216,6 +217,10 @@ app.on('activate', () => {
 const filesQueuedToOpen = [];
 app.on('open-file', (event, path) => {
   event.preventDefault();
+  if (projectProcess.worker) {
+    void projectProcess.open([path]);
+    return;
+  }
   // This event can be called before ready.
   if (app.isReady() && !isMigrating) {
     // The path we get should already be absolute
@@ -257,6 +262,7 @@ let isMigrating = true;
 let migratePromise = null;
 
 app.on('second-instance', (event, argv, workingDirectory) => {
+  if (projectProcess.worker) return;
   migratePromise.then(() => {
     const commandLineOptions = parseCommandLine(argv);
     EditorWindow.openFiles(commandLineOptions.files, commandLineOptions.fullscreen, workingDirectory);
@@ -265,6 +271,15 @@ app.on('second-instance', (event, argv, workingDirectory) => {
 
 app.whenReady().then(() => {
   AbstractWindow.settingsChanged();
+
+  if (projectProcess.worker) {
+    return projectProcess.ready.then(({file, fullscreen}) => {
+      isMigrating = false;
+      const editor = EditorWindow.openIsolatedProject(file, fullscreen);
+      editor.window.once('closed', () => app.quit());
+      projectProcess.setEditor(editor);
+    });
+  }
 
   migratePromise = migrate().then((shouldContinue) => {
     if (!shouldContinue) {
@@ -287,12 +302,5 @@ app.whenReady().then(() => {
       app.quit();
     }
 
-    checkForUpdates()
-      .catch((error) => {
-        // We don't want to show a full error message when updates couldn't be fetched.
-        // The website might be down, the internet might be broken, might be a school
-        // network that blocks turbowarp.org, etc.
-        console.error('Error checking for updates:', error);
-      });
   });
 });
