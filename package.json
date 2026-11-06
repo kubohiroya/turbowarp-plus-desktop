@@ -11,6 +11,7 @@
   "scripts": {
     "fetch": "node scripts/download-library-files.mjs && node scripts/download-packager.mjs && node scripts/prepare-extensions.mjs",
     "webpack:compile": "webpack",
+    "webpack:plus": "node scripts/build-plus-renderer.mjs",
     "webpack:watch": "webpack --watch",
     "webpack:prod": "cross-env NODE_ENV=production webpack",
     "electron:start": "electron src-main/entrypoint.js",
@@ -64,6 +65,7 @@
     "files": [
       "node_modules/**/*",
       "config/feature-flags.js",
+      "config/plus-renderer.json",
       "src-main/**/*",
       "src-preload/**/*",
       "src-renderer/**/*",

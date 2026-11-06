@@ -1,3 +1,4 @@
+const {existsSync} = require('node:fs');
 const fsPromises = require('fs/promises');
 const path = require('path');
 const nodeURL = require('url');
@@ -23,7 +24,18 @@ const SecurityPromptWindow = require('./security-prompt');
 const projectProcess = require('../project-process');
 const {isSB3} = require('../project-lock');
 const {ExternalYamlFiles} = require('../external-yaml-files');
-const {projectJSONTransfer, projectAssetTransfer, externalYaml, workspaceLayout} = require('../../config/feature-flags');
+const {plusRenderer, projectJSONTransfer, projectAssetTransfer, externalYaml, workspaceLayout} =
+  require('../../config/feature-flags');
+
+const rendererDirectory = plusRenderer ? 'plus-gui' : 'gui';
+if (plusRenderer) {
+  const rendererRoot = path.join(__dirname, '../../dist-renderer-webpack/editor', rendererDirectory);
+  const buildInfoPath = path.join(rendererRoot, 'build-info.json');
+  if (!existsSync(buildInfoPath) || !existsSync(path.join(rendererRoot, 'gui.html')) ||
+      require(buildInfoPath).editorRevision !== require('../../config/plus-renderer.json').editorRevision) {
+    throw new Error('The pinned Plus renderer is missing or out of date. Run npm run webpack:plus before enabling it.');
+  }
+}
 
 const TYPE_FILE = 'file';
 const TYPE_URL = 'url';
@@ -702,7 +714,7 @@ class EditorWindow extends ProjectRunningWindow {
       this.isInEditorFullScreen = !!isFullScreen;
     });
 
-    this.loadURL('tw-editor://./gui/gui.html');
+    this.loadURL(`tw-editor://./${rendererDirectory}/gui.html`);
     this.show();
   }
 
