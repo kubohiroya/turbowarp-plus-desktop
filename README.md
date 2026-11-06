@@ -52,7 +52,7 @@ TW_PLUS_DESKTOP_DATA_DIR="$profile_dir" TW_PLUS_DESKTOP_RENDERER=1 npm run elect
 
 起動時にフラグを外すと標準 renderer に切り替わります。標準 renderer では、Plus 作品や内容を判定できない既存ファイルへの上書きが拒否されます。別名で新規保存するか、Plus renderer で作品を開き直してください。
 
-バックパックの別窓を検証する場合は、[Desktop の権限境界](docs/desktop-security-boundaries.md) を参照してください。
+Plus editor の別窓を検証する場合は、[Desktop の権限境界](docs/desktop-security-boundaries.md) を参照してください。
 
 ## 開発プロファイル
 

@@ -1,7 +1,6 @@
 const path = require('node:path');
 const AbstractWindow = require('./abstract');
 
-const framePrefix = 'tw-plus-backpack-';
 const ticketPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const controlsChannel = 'tw-plus-popup:mode';
 const editorOrigin = 'tw-editor://.';
@@ -12,11 +11,14 @@ const fromMainFrame = (event, contents, url) => {
   return frame && frame === contents.mainFrame && frame.origin === editorOrigin && frame.url === url;
 };
 
-class BackpackPopoutWindow extends AbstractWindow {
+class EditorPopoutWindow extends AbstractWindow {
   constructor (window, parentWindow, url) {
     super({existingWindow: window, parentWindow});
     this.initialURL = 'about:blank';
     const contents = window.webContents;
+    contents.ipc.on('tw-plus-popup:enabled', event => {
+      event.returnValue = Boolean(fromMainFrame(event, contents, url));
+    });
     const mode = () => window.isMinimized() ? 'minimized' : window.isMaximized() ? 'maximized' : 'normal';
     contents.ipc.handle(controlsChannel, (event, action) => {
       if (!fromMainFrame(event, contents, url)) return;
@@ -25,8 +27,7 @@ class BackpackPopoutWindow extends AbstractWindow {
       else if (action === 'restore') {
         if (window.isMinimized()) window.restore();
         if (window.isMaximized()) window.unmaximize();
-      }
-      else if (action !== undefined) return;
+      } else if (action !== undefined) return;
       return mode();
     });
     for (const event of ['maximize', 'unmaximize', 'minimize', 'restore']) {
@@ -57,7 +58,7 @@ class BackpackPopoutWindow extends AbstractWindow {
           if (!window.isDestroyed()) this.show();
         }).catch(error => {
           if (!window.isDestroyed()) {
-            console.error('Could not load the detached backpack:', error);
+            console.error('Could not load the detached editor panel:', error);
             window.destroy();
           }
         });
@@ -84,44 +85,62 @@ class BackpackPopoutWindow extends AbstractWindow {
   }
 }
 
-function installBackpackPopout (editor, editorURL) {
+function installEditorPopouts (editor, editorURL, enabled) {
+  editorURL.searchParams.set('twPlusStandardLayout', '1');
+  if (enabled.has('backpack')) editorURL.searchParams.set('twPlusBackpackPopout', '1');
+  if (enabled.has('stage')) editorURL.searchParams.set('twPlusStagePopout', '1');
+  if (enabled.has('sprite-list') || enabled.has('sprite-properties')) {
+    editorURL.searchParams.set('twPlusTargetPanelsPopout', '1');
+    editorURL.searchParams.set('twPlusSpriteProperties', '1');
+    // The properties panel uses the editor's layout menu to reveal its undock control.
+    editorURL.searchParams.set('twPlusWindowLayout', '1');
+  }
+  if (enabled.has('code')) editorURL.searchParams.set('twPlusCodePopout', '1');
+
   const parent = editor.window;
   const contents = parent.webContents;
-  let reservation;
-  let child;
-  const clearReservation = () => {
-    if (!reservation) return;
-    clearTimeout(reservation.expiry);
-    reservation = undefined;
+  const reservations = new Map();
+  const children = new Map();
+  const clearReservation = frameName => {
+    clearTimeout(reservations.get(frameName)?.expiry);
+    reservations.delete(frameName);
   };
   const close = () => {
-    clearReservation();
-    if (child && !child.isDestroyed()) child.destroy();
+    for (const frameName of reservations.keys()) clearReservation(frameName);
+    for (const {window} of children.values()) {
+      if (!window.isDestroyed()) window.destroy();
+    }
   };
 
-  editor.ipc.on('reserve-backpack-popout', (event, ticket) => {
-    if (!fromMainFrame(event, contents, editorURL) ||
-        typeof ticket !== 'string' || !ticketPattern.test(ticket) || child || reservation) {
+  editor.ipc.on('reserve-editor-popout', (event, kind, ticket) => {
+    if (!fromMainFrame(event, contents, editorURL.href) || !enabled.has(kind) ||
+        typeof ticket !== 'string' || !ticketPattern.test(ticket)) {
       event.returnValue = false;
       return;
     }
-    reservation = {frameName: framePrefix + ticket, ticket, expiry: setTimeout(clearReservation, 5000).unref()};
+    const frameName = `tw-plus-${kind}-${ticket}`;
+    const count = [...reservations.values(), ...children.values()].filter(item => item.kind === kind).length;
+    if (reservations.has(frameName) || children.has(frameName) || count >= (kind === 'code' ? 2 : 1)) {
+      event.returnValue = false;
+      return;
+    }
+    reservations.set(frameName, {kind, ticket, expiry: setTimeout(() => clearReservation(frameName), 5000).unref()});
     event.returnValue = true;
   });
-  const matchesReservation = details =>
-    reservation && details.frameName === reservation.frameName && details.url === 'about:blank' && !details.postBody;
-  contents.on('did-create-window', (window, details) => {
-    if (!isReservedPopout(details.frameName)) return;
-    if (!matchesReservation(details) || !reservation.consumed) {
+  contents.on('did-create-window', (window, {frameName, url: initialURL, postData}) => {
+    if (!isReservedPopout(frameName)) return;
+    const reservation = reservations.get(frameName);
+    if (!reservation?.consumed || initialURL !== 'about:blank' || postData) {
       window.destroy();
       return;
     }
-    const url = new URL('backpack-popout.html', editorURL);
+    const {kind} = reservation;
+    const url = new URL(`${kind}-popout.html`, editorURL);
     url.hash = reservation.ticket;
-    clearReservation();
-    child = window;
-    window.once('closed', () => { child = undefined; });
-    new BackpackPopoutWindow(window, parent, url.href);
+    clearReservation(frameName);
+    children.set(frameName, {kind, window});
+    window.once('closed', () => children.delete(frameName));
+    new EditorPopoutWindow(window, parent, url.href);
   });
   contents.on('did-start-navigation', event => {
     if (event.isMainFrame) close();
@@ -129,7 +148,9 @@ function installBackpackPopout (editor, editorURL) {
   parent.once('closed', close);
 
   return details => {
-    if (contents.getURL() !== editorURL || !matchesReservation(details) || reservation.consumed) {
+    const reservation = reservations.get(details.frameName);
+    if (contents.getURL() !== editorURL.href || !reservation || reservation.consumed ||
+        details.url !== 'about:blank' || details.postBody) {
       return {action: 'deny'};
     }
     reservation.consumed = true;
@@ -144,11 +165,11 @@ function installBackpackPopout (editor, editorURL) {
           sandbox: true,
           webSecurity: true,
           webviewTag: false,
-          preload: path.resolve(__dirname, '../../src-preload/backpack-popout.js')
+          preload: path.resolve(__dirname, '../../src-preload/editor-popout.js')
         }
       }
     };
   };
 }
 
-module.exports = {installBackpackPopout, isReservedPopout};
+module.exports = {installEditorPopouts, isReservedPopout};

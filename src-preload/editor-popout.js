@@ -1,8 +1,7 @@
 const {contextBridge, ipcRenderer} = require('electron');
 
 const channel = 'tw-plus-popup:mode';
-if (location.protocol === 'tw-editor:' && location.host === '.' &&
-    location.pathname === '/plus-gui/backpack-popout.html') {
+if (location.protocol === 'tw-editor:' && ipcRenderer.sendSync('tw-plus-popup:enabled') === true) {
   // Do not let the consumed frame name select this window without the open handler.
   window.name = '';
   contextBridge.exposeInMainWorld('TwPlusWindowControls', {
