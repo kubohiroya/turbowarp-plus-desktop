@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const {execFileSync} = require('node:child_process');
 const {randomUUID} = require('node:crypto');
 const fs = require('node:fs/promises');
 const {createRequire} = require('node:module');
@@ -24,28 +25,41 @@ test('editor popouts require a reservation and isolate each child', {
   skip: process.platform !== 'darwin' || !editor || !fixture,
   timeout: 90000
 }, async t => {
+  const buildInfo = require('../dist-renderer-webpack/editor/plus-gui/build-info.json');
+  const editorRevision = execFileSync('git', ['-C', editor, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+  assert.equal(buildInfo.editorRevision, editorRevision);
   const {_electron} = createRequire(path.join(editor, 'package.json'))('playwright');
   const executablePath = process.env.TW_PLUS_TEST_ELECTRON || require('electron');
   const launch = async (popout, verify) => {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-editor-popouts-'));
     try {
+      const env = {
+        ...process.env,
+        TW_PLUS_DESKTOP_DATA_DIR: profile,
+        TW_PLUS_DESKTOP_RENDERER: '1',
+        TW_PLUS_DESKTOP_PROJECT_ISOLATION: '0'
+      };
+      for (const flag of flags) {
+        const key = `TW_PLUS_DESKTOP_${flag}_POPOUT`;
+        if (popout) env[key] = '1';
+        else delete env[key];
+      }
       const app = await _electron.launch({
         executablePath,
         cwd: repo,
-        args: [path.join(repo, 'src-main/entrypoint.js'), fixture],
-        env: {
-          ...process.env,
-          TW_PLUS_DESKTOP_DATA_DIR: profile,
-          TW_PLUS_DESKTOP_RENDERER: '1',
-          TW_PLUS_DESKTOP_PROJECT_ISOLATION: '0',
-          ...Object.fromEntries(flags.map(flag => [`TW_PLUS_DESKTOP_${flag}_POPOUT`, popout ? '1' : '0']))
-        }
+        args: [path.join(__dirname, 'editor-popouts-app.js'), fixture],
+        env
       });
       try {
         const page = await app.firstWindow();
         page.setDefaultTimeout(8000);
         await page.waitForFunction(() => window.ReduxStore?.getState().scratchGui.vm.runtime.targets
           .some(target => target.getName() === 'Sprite1'));
+        assert.equal(await app.evaluate(() => process.versions.electron), buildInfo.electronVersion);
+        const servedRevision = await page.evaluate(async () => (await (await fetch('build-info.json')).json()).editorRevision);
+        assert.equal(servedRevision, editorRevision);
+        const window = await app.browserWindow(page);
+        assert.equal(await window.evaluate(win => win.isVisible() || win.isFocused()), false);
         await verify(app, page);
       } finally {
         await app.close();
@@ -84,15 +98,15 @@ test('editor popouts require a reservation and isolate each child', {
     assert.equal(await opens(frame, 'backpack'), false);
 
     const button = (name, within = page) => within.getByRole('button', {name});
-    const press = (name, within = page) => button(name, within).press('Enter');
+    const click = locator => locator.dispatchEvent('click');
+    const press = (name, within = page) => click(button(name, within));
     const internalToExternal = title => async () => {
       const panel = page.getByRole('region', {name: title});
-      await button(layoutLabel, panel).click();
-      await button(separateLabel, panel).click();
+      await press(layoutLabel, panel);
+      await press(separateLabel, panel);
     };
-    const open = async (kind, action, source = page) => {
+    const open = async (kind, action) => {
       t.diagnostic(`Opening ${kind}`);
-      await source.bringToFront();
       const [child] = await Promise.all([app.waitForEvent('window', {timeout: 15000}), action()]);
       await child.waitForURL(new RegExp(`/plus-gui/${kind}-popout\\.html#[0-9a-f-]+$`), {timeout: 12000});
       await child.waitForFunction(() => window.opener === null && document.querySelector('#mount')?.children.length);
@@ -110,20 +124,15 @@ test('editor popouts require a reservation and isolate each child', {
       const childWindow = await app.browserWindow(child);
       assert.deepEqual(await childWindow.evaluate(window => {
         const {nodeIntegration, contextIsolation, sandbox, webSecurity} = window.webContents.getLastWebPreferences();
-        return {nodeIntegration, contextIsolation, sandbox, webSecurity};
-      }), {nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true});
+        return {nodeIntegration, contextIsolation, sandbox, webSecurity, visible: window.isVisible(), focused: window.isFocused()};
+      }), {
+        nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, visible: false, focused: false
+      });
       const ticket = new URL(child.url()).hash.slice(1);
       assert.equal(await page.evaluate(name => window.open('about:blank', name) !== null, `tw-plus-${kind}-${ticket}`), false);
       assert.equal(await child.evaluate(() => window.open('about:blank') !== null), false);
       assert.equal(await child.evaluate(() => TwPlusWindowControls.change('close')), undefined);
-      await child.evaluate(() => TwPlusWindowControls.change('maximize'));
-      await child.waitForFunction(async () => await TwPlusWindowControls.mode() === 'maximized');
-      await child.evaluate(() => TwPlusWindowControls.change('restore'));
-      await child.waitForFunction(async () => await TwPlusWindowControls.mode() === 'normal');
-      await child.evaluate(() => TwPlusWindowControls.change('minimize'));
-      await child.waitForFunction(async () => await TwPlusWindowControls.mode() === 'minimized', null, {polling: 100});
-      await child.evaluate(() => TwPlusWindowControls.change('restore'));
-      await child.waitForFunction(async () => await TwPlusWindowControls.mode() === 'normal', null, {polling: 100});
+      assert.equal(await child.evaluate(() => TwPlusWindowControls.mode()), 'normal');
       await childWindow.evaluate(window => {
         globalThis.blockedChildNavigation = new Promise(resolve => {
           const timeout = setTimeout(() => resolve(false), 4000);
@@ -147,28 +156,28 @@ test('editor popouts require a reservation and isolate each child', {
 
     const stage = await open('stage', async () => {
       const displayLabel = /^(Stage display|ステージの表示)$/;
-      await button(/Reveal stage|ステージを展開/).hover();
-      await button(displayLabel).click();
-      await page.getByRole('menu', {name: displayLabel}).getByRole('menuitem', {name: separateLabel}).click();
+      await press(/Reveal stage|ステージを展開/);
+      await press(displayLabel);
+      await click(page.getByRole('menu', {name: displayLabel}).getByRole('menuitem', {name: separateLabel}));
     });
     await verifyChild('stage', stage);
     await stage.close();
 
     const revealSprites = /Reveal sprite list|スプライト一覧を展開/;
     const list = await open('sprite-list', async () => {
-      await button(revealSprites).hover();
-      await button(/^(Undock sprite list|アンドック)$/).click();
+      await press(revealSprites);
+      await press(/^(Undock sprite list|アンドック)$/);
       await internalToExternal(/^(Sprite list|スプライト一覧)$/)();
     });
     await verifyChild('sprite-list', list);
     await list.close();
 
     await press(/Layout options|配置メニュー/);
-    await page.getByRole('menuitemcheckbox', {name: /Show undock buttons|アンドックボタンを表示/}).press('Enter');
+    await click(page.getByRole('menuitemcheckbox', {name: /Show undock buttons|アンドックボタンを表示/}));
     const properties = await open('sprite-properties', async () => {
-      await button(revealSprites).hover();
+      await press(revealSprites);
       const toggle = button(/^(Sprite|スプライト)$/);
-      await toggle.click();
+      await click(toggle);
       await press(openLabel, toggle.locator('..'));
       await internalToExternal(/^(Sprite|スプライト)$/)();
     });
@@ -176,26 +185,15 @@ test('editor popouts require a reservation and isolate each child', {
     await properties.close();
 
     const child = await open('code', async () => {
-      await page.mouse.move(500, 400);
-      await page.getByRole('tab', {name: /^(Code|コード)$/}).focus();
-      await button(openLabel).click();
+      await button(revealSprites).dispatchEvent('keydown', {key: 'Escape'});
+      const tab = page.getByRole('tab', {name: /^(Code|コード)$/});
+      await tab.focus();
+      await press(openLabel);
     });
     await verifyChild('code', child);
-    const duplicate = await open('code', async () => {
-      const childWindow = await app.browserWindow(child);
-      await childWindow.evaluate(window => {
-        window.focus();
-        window.webContents.focus();
-      });
-      await child.waitForFunction(() => document.hasFocus());
-      await button(layoutLabel, child).click();
-      await child.getByRole('menuitem', {
-        name: /^(Open another view of this editor|この編集画面をもう一枚開く（別のビューを開く）)$/
-      }).click();
-    }, child);
-    await verifyChild('code', duplicate);
-    assert.equal(await page.evaluate(value => EditorPreload.reservePopout('code', value), randomUUID()), false);
-    await Promise.all([child.waitForEvent('close'), duplicate.waitForEvent('close'), page.reload()]);
+    assert.deepEqual(await page.evaluate(tickets => tickets.map(ticket => EditorPreload.reservePopout('code', ticket)),
+      [randomUUID(), randomUUID()]), [true, false]);
+    await Promise.all([child.waitForEvent('close'), page.reload()]);
     assert.equal(app.windows().length, 1);
   });
 });

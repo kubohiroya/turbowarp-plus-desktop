@@ -127,10 +127,10 @@ function installEditorPopouts (editor, editorURL, enabled) {
     reservations.set(frameName, {kind, ticket, expiry: setTimeout(() => clearReservation(frameName), 5000).unref()});
     event.returnValue = true;
   });
-  contents.on('did-create-window', (window, {frameName, url: initialURL, postData}) => {
+  contents.on('did-create-window', (window, {frameName, url: initialURL, postBody}) => {
     if (!isReservedPopout(frameName)) return;
     const reservation = reservations.get(frameName);
-    if (!reservation?.consumed || initialURL !== 'about:blank' || postData) {
+    if (!reservation?.consumed || initialURL !== 'about:blank' || postBody) {
       window.destroy();
       return;
     }

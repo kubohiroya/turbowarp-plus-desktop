@@ -44,4 +44,4 @@ TW_PLUS_TEST_EDITOR_CHECKOUT=/absolute/path/to/editor TW_PLUS_TEST_SB3="$work/fi
   node --test test/editor-popouts.macos.test.js
 ```
 
-既定 OFF、予約なしの別窓、サブフレーム、無効なチケット、各画面の UI からの起動、子の権限とナビゲーション、親の再読み込みを確認する。
+実 Electron の BrowserWindow を非表示で起動し、OS のフォーカスを切り替えずに確認する。配信された renderer のリビジョン、既定 OFF、予約なしの別窓、サブフレーム、無効・別種別・使用済みのチケット、各画面の UI からの起動、子の隔離とナビゲーション拒否、コード別窓の予約上限、親の再読み込みによる終了を検証する。画面表示、OS のフォーカス、最大化・最小化・復元の表示結果、コード別窓の複製操作は画面付きの検証で扱う。
