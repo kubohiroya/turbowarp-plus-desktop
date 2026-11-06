@@ -26,6 +26,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Install runtime dependencies for the test app
+        run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
       - name: Prepare the pinned Desktop test app
         run: |
           dmg="$RUNNER_TEMP/tw-desktop-1.17.1.dmg"
