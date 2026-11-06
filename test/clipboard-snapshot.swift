@@ -16,7 +16,7 @@ if CommandLine.arguments[1] == "save" {
     } ?? []
     try JSONEncoder().encode(items).write(to: file, options: .atomic)
 } else if let text = board.string(forType: .string),
-          ["D4 counter", "# D4 source", "D4 ordinary clipboard text"].contains(where: text.contains) {
+          ["D4 counter", "# D4 source", "D4 ordinary clipboard text", "D5 clipboard costume", "D5 clipboard sound"].contains(where: text.contains) {
     let items = try JSONDecoder().decode([Item].self, from: Data(contentsOf: file))
     board.clearContents()
     board.writeObjects(items.map { saved in

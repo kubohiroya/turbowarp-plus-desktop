@@ -83,7 +83,7 @@ async function browserDrop (page, surface, data) {
   }
 }
 
-async function checkAssetVault (t, source, destination, profile, sourcePid) {
+function sampleWav () {
   const sample = Buffer.alloc(44 + 1600);
   sample.write('RIFF', 0);
   sample.writeUInt32LE(sample.length - 8, 4);
@@ -97,7 +97,11 @@ async function checkAssetVault (t, source, destination, profile, sourcePid) {
   sample.writeUInt16LE(16, 34);
   sample.write('data', 36);
   sample.writeUInt32LE(sample.length - 44, 40);
+  return sample;
+}
 
+async function checkAssetVault (t, source, destination, profile, sourcePid) {
+  const sample = sampleWav();
   const staged = await source.evaluate(async sampleBytes => {
     const costume = vm.editingTarget.getCostumes()[0];
     const sourceBytes = costume.asset.data;
@@ -177,14 +181,103 @@ async function checkAssetVault (t, source, destination, profile, sourcePid) {
   t.diagnostic('Two project processes exchanged and decoded real SVG and WAV assets after closing the source window.');
 }
 
-test(process.env.TW_D5_TEST_ASSETS === '1' ? 'Desktop project processes resolve a shared binary asset' :
+async function permitClipboard (context) {
+  const prompt = context.pages().find(page => page.url().startsWith('tw-security-prompt:'));
+  if (prompt) await prompt.locator('.allow:enabled').click({timeout: 6000});
+  return Boolean(prompt);
+}
+
+const assetTabs = [
+  ['costume', /^(Costumes|コスチューム)$/],
+  ['sound', /^(Sounds|音)$/]
+];
+
+async function checkAssetPanels (t, source, destination) {
+  const sourceNames = {costume: 'D5 clipboard costume', sound: 'D5 clipboard sound'};
+  await source.evaluate(async ({sample, names}) => {
+    vm.renameCostume(0, names.costume);
+    const {storage} = vm.runtime;
+    const asset = storage.createAsset(storage.AssetType.Sound, 'wav', Uint8Array.from(sample), null, true);
+    await vm.addSound({name: names.sound, asset, assetId: asset.assetId,
+      md5: asset.assetId + '.wav', dataFormat: 'wav'}, vm.editingTarget.id);
+  }, {sample: Array.from(sampleWav()), names: sourceNames});
+  const assets = (page, kind) => page.evaluate(async kind => {
+    const target = vm.editingTarget;
+    const items = kind === 'costume' ? target.getCostumes() : target.getSounds();
+    return Promise.all(items.map(async (item, index) => ({
+      hash: Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', item.asset.data))).join(','),
+      decoded: !item.broken && (kind === 'costume' ?
+        vm.runtime.renderer.getSkinSize(item.skinId).every(size => size > 0) : vm.getSoundBuffer(index)?.length > 0)
+    })));
+  }, kind);
+  for (const [kind, label] of assetTabs) {
+    const panel = async page => {
+      await page.bringToFront();
+      await page.getByRole('tab', {name: label}).click();
+      const node = page.locator('[data-project-asset-transfer="' + kind + '"]');
+      await node.waitFor();
+      return node;
+    };
+    const from = await panel(source);
+    const original = (await assets(source, kind))[0];
+    assert(original.decoded);
+    await from.getByRole('button', {name: /^(Copy asset|素材をコピー)$/}).click();
+    await expectEventually('real OS asset clipboard', async () => {
+      await permitClipboard(source.context());
+      return execFileSync('pbpaste', {encoding: 'utf8'}).trim() === sourceNames[kind];
+    });
+    const to = await panel(destination);
+    const before = (await assets(destination, kind)).length;
+    await to.getByRole('button', {name: /^(Paste asset|素材を貼り付け)$/}).click();
+    await expectEventually('clipboard asset decoded in destination', async () => {
+      await permitClipboard(destination.context());
+      const current = await assets(destination, kind);
+      return current.length === before + 1 && current.at(-1).hash === original.hash && current.at(-1).decoded;
+    });
+    await source.bringToFront();
+    const prepare = from.getByRole('button', {name: /^(Prepare asset drag|ドラッグを準備)$/});
+    const drag = from.getByRole('button', {name: /^(Drag asset|素材をドラッグ)$/});
+    await prepare.click();
+    await drag.waitFor();
+    await from.getByRole('button', {name: /^(Cancel asset drag|準備を取り消す)$/}).click();
+    await drag.waitFor({state: 'hidden'});
+    assert.equal((await assets(destination, kind)).length, before + 1);
+    await prepare.click();
+    const packet = await browserDrag(source, drag);
+    const mime = 'application/x.turbowarp.' + kind + '+json';
+    const data = packet.items.find(item => item.mimeType === mime);
+    assert(data, 'The drag contains the kind-specific JSON MIME.');
+    const envelope = JSON.parse(data.data);
+    assert.equal(envelope.kind, kind);
+    assert.match(envelope.assets[0].sha256, /^[a-f0-9]{64}$/);
+    await destination.bringToFront();
+    const invalid = {...envelope, assets: [{...envelope.assets[0], sha256: '0'.repeat(64)}]};
+    await browserDrop(destination, to, {...packet, items: [{mimeType: mime, data: JSON.stringify(invalid)}]});
+    await expectEventually('tampered asset rejected', async () =>
+      (await to.getByRole('status').textContent()).includes('missing, expired, or invalid'));
+    assert.equal((await assets(destination, kind)).length, before + 1);
+    await browserDrop(destination, to, packet);
+    await expectEventually('drag asset decoded in destination', async () => {
+      const current = await assets(destination, kind);
+      return current.length === before + 2 && current.at(-1).hash === original.hash && current.at(-1).decoded;
+    });
+    assert.deepEqual((await assets(source, kind))[0], original);
+    t.diagnostic(kind + ': OS clipboard and cross-process drag imported matching, decoded bytes.');
+  }
+}
+
+test(process.env.TW_D5_TEST_UI === 'rollback' ? 'Desktop asset tabs remain available with D5 disabled' :
+  process.env.TW_D5_TEST_UI === '1' ? 'Desktop asset panels transfer costumes and sounds' :
+  process.env.TW_D5_TEST_ASSETS === '1' ? 'Desktop project processes resolve a shared binary asset' :
   'two Desktop projects transfer scripts and YAML via the OS clipboard and cross-process drag data', {
   skip: process.platform !== 'darwin' || !process.env.TW_D4_TEST_APP,
   timeout: 155000
 }, async t => {
   const {chromium} = require(process.env.TW_D4_PLAYWRIGHT);
   const enabled = process.env.TW_D4_TEST_ENABLED !== '0';
-  const assets = enabled && process.env.TW_D5_TEST_ASSETS === '1';
+  const assetPanels = enabled && process.env.TW_D5_TEST_UI === '1';
+  const assetRollback = enabled && process.env.TW_D5_TEST_UI === 'rollback';
+  const assets = assetPanels || (enabled && process.env.TW_D5_TEST_ASSETS === '1');
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-d4-transfer-'));
   const profile = path.join(work, 'data');
   const first = path.join(work, 'D4 Source.sb3');
@@ -193,7 +286,8 @@ test(process.env.TW_D5_TEST_ASSETS === '1' ? 'Desktop project processes resolve 
   const logPath = path.join(work, 'electron.log');
   const log = await fs.open(logPath, 'a');
   const snapshot = operation => execFileSync('swift', [path.join(__dirname, 'clipboard-snapshot.swift'), operation, clipboard]);
-  if (!assets) snapshot('save');
+  const usesClipboard = !assetRollback && (!assets || assetPanels);
+  if (usesClipboard) snapshot('save');
   const sessions = [];
   let broker;
   t.after(async () => {
@@ -201,7 +295,7 @@ test(process.env.TW_D5_TEST_ASSETS === '1' ? 'Desktop project processes resolve 
     if (broker) {
       try { process.kill(-broker.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
     }
-    if (!assets) snapshot('restore');
+    if (usesClipboard) snapshot('restore');
     await fs.rm(clipboard, {force: true});
     await log.close();
   });
@@ -255,6 +349,19 @@ test(process.env.TW_D5_TEST_ASSETS === '1' ? 'Desktop project processes resolve 
       assert.equal(await pane.getByRole('button', {name: /^(Paste YAML|YAML を貼り付け)$/}).count(), 0);
       return;
     }
+    if (assetRollback) {
+      for (const [, label] of assetTabs) {
+        const tab = B.getByRole('tab', {name: label});
+        await tab.click();
+        assert.equal(await tab.getAttribute('aria-selected'), 'true');
+        assert.equal(await B.locator('[data-project-asset-transfer]').count(), 0);
+      }
+      return;
+    }
+    if (assetPanels) {
+      await checkAssetPanels(t, A, B);
+      return;
+    }
     if (assets) {
       const sourceLock = records.find(record => path.basename(record.path) === path.basename(first));
       assert(sourceLock);
@@ -279,11 +386,6 @@ test(process.env.TW_D5_TEST_ASSETS === '1' ? 'Desktop project processes resolve 
     const selectScript = () => A.evaluate(() => ScratchBlocks.getMainWorkspace().getBlockById('d4-script').select());
     await selectScript();
     assert.equal(await A.locator('.tw-plus-script-transfer-drag').count(), 1);
-    const permitClipboard = async context => {
-      const prompt = context.pages().find(page => page.url().startsWith('tw-security-prompt:'));
-      if (prompt) await prompt.locator('.allow:enabled').click({timeout: 6000});
-      return Boolean(prompt);
-    };
     const clipboardContains = async (context, text) => {
       await permitClipboard(context);
       return execFileSync('pbpaste', {encoding: 'utf8'}).includes(text);
