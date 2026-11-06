@@ -3,7 +3,24 @@ const zlib = require('zlib');
 const nodeURL = require('url');
 const {app, protocol, net} = require('electron');
 const {getDist, getPlatform} = require('./platform');
+const {documentCsp} = require('../config/feature-flags');
 const packageJSON = require('../package.json');
+
+// Legacy extensions load URL scripts, and the VM compiler and generated previews
+// use dynamic code. Keep these paths while restricting document-level injection.
+const mainDocumentCsp = [
+  "default-src 'self' http: https: blob: data: tw-library: tw-extensions:",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' http: https: blob: data: tw-extensions:",
+  "style-src 'self' 'unsafe-inline' http: https: blob: data: tw-extensions:",
+  "connect-src 'self' http: https: ws: wss: blob: data: tw-library: tw-extensions:",
+  "worker-src 'self' blob: data:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'"
+].join('; ');
+const noScriptAttributes = `${mainDocumentCsp}; script-src-attr 'none'`;
+// Preserve the standard Editor's packaged script-load error handler.
+const standardEditorCsp = `${mainDocumentCsp}; script-src-attr 'unsafe-hashes' 'sha256-qr0BJ7/5Xzfi41D3XBJh8rJfliWvKQ+0+g9aZH9jyLs='`;
 
 /**
  * @typedef Metadata
@@ -18,6 +35,7 @@ const packageJSON = require('../package.json');
  * @property {string} [directoryIndex] Defaults to none
  * @property {string} [defaultExtension] Defaults to none
  * @property {string} [csp] Defaults to none
+ * @property {Map<string, string>} [documentCsp] CSP overrides keyed by packaged relative path
  */
 
 /** @type {Record<string, Metadata>} */
@@ -28,6 +46,10 @@ const FILE_SCHEMES = {
     supportFetch: true,
     secure: true,
     embeddable: true, // migration helper
+    documentCsp: new Map([
+      [path.join('gui', 'gui.html'), standardEditorCsp],
+      [path.join('plus-gui', 'gui.html'), noScriptAttributes]
+    ])
   },
   'tw-desktop-settings': {
     root: path.resolve(__dirname, '../src-renderer/desktop-settings'),
@@ -46,6 +68,7 @@ const FILE_SCHEMES = {
     standard: true,
     secure: true,
     embeddable: true, // migration helper
+    documentCsp: new Map([['standalone.html', noScriptAttributes]])
   },
   'tw-library': {
     root: path.resolve(__dirname, '../dist-library-files'),
@@ -194,6 +217,12 @@ const getBaseProtocolHeaders = metadata => {
   return result;
 };
 
+const getDocumentHeaders = (metadata, resolved) => {
+  if (!documentCsp || !metadata.documentCsp) return {};
+  const csp = metadata.documentCsp.get(path.relative(metadata.root, resolved).toLowerCase());
+  return csp ? {'content-security-policy': csp, 'x-frame-options': 'DENY'} : {};
+};
+
 /** @param {Metadata} metadata */
 const createModernProtocolHandler = (metadata) => {
   const root = path.join(metadata.root, '/');
@@ -239,6 +268,7 @@ const createModernProtocolHandler = (metadata) => {
 
       const headers = {
         ...baseHeaders,
+        ...getDocumentHeaders(metadata, resolved),
         'content-type': mimeType
       };
 
@@ -381,6 +411,7 @@ const createLegacyFileProtocolHandler = (metadata) => {
         path: resolved,
         headers: {
           ...baseHeaders,
+          ...getDocumentHeaders(metadata, resolved),
           'content-type': mimeType
         }
       });
