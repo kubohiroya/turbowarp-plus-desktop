@@ -20,6 +20,8 @@ const RichPresence = require('../rich-presence.js');
 const FileAccessWindow = require('./file-access-window.js');
 const ExtensionDocumentationWindow = require('./extension-documentation.js');
 const SecurityPromptWindow = require('./security-prompt');
+const projectProcess = require('../project-process');
+const {isSB3} = require('../project-lock');
 
 const TYPE_FILE = 'file';
 const TYPE_URL = 'url';
@@ -232,6 +234,7 @@ class EditorWindow extends ProjectRunningWindow {
 
     if (initialFile !== null) {
       this.activeFileId = generateFileId();
+      if (projectProcess.worker) initialFile.lease = projectProcess.initialLease();
       this.openedFiles.set(this.activeFileId, initialFile);
     }
 
@@ -313,6 +316,7 @@ class EditorWindow extends ProjectRunningWindow {
 
     this.ipc.handle('get-file', async (event, id) => {
       const file = getFileById(id);
+      if (projectProcess.worker && file.type === TYPE_FILE && isSB3(file.path)) projectProcess.verify(file.lease);
       const {name, data} = await file.read();
       return {
         name,
@@ -352,7 +356,9 @@ class EditorWindow extends ProjectRunningWindow {
       this.window.setRepresentedFilename(file.path);
     });
 
-    this.ipc.handle('closed-file', () => {
+    let writing = false;
+    this.ipc.handle('closed-file', async () => {
+      if (projectProcess.worker && !writing) await projectProcess.detach();
       this.activeFileId = null;
       this.window.setRepresentedFilename('');
     });
@@ -379,6 +385,11 @@ class EditorWindow extends ProjectRunningWindow {
       const filePath = result.filePaths[0];
       settings.lastDirectory = path.dirname(filePath);
       await settings.save();
+
+      if (projectProcess.worker) {
+        await projectProcess.open([filePath]);
+        return null;
+      }
 
       const id = generateFileId();
       this.openedFiles.set(id, new OpenedFile(TYPE_FILE, filePath));
@@ -407,10 +418,22 @@ class EditorWindow extends ProjectRunningWindow {
         return null;
       }
 
-      const filePath = result.filePath;
+      let filePath = result.filePath;
+
+      let lease;
+      if (projectProcess.worker) {
+        try {
+          lease = await projectProcess.reserve(filePath);
+          filePath = lease.path;
+        } catch (error) {
+          dialog.showErrorBox(APP_NAME, error.message);
+          return null;
+        }
+      }
 
       const unsafePath = getUnsafePaths().find(i => isChildPath(i.path, filePath));
       if (unsafePath) {
+        if (lease) await projectProcess.cancel(lease);
         // No need to block until the message box is closed
         dialog.showMessageBox(this.window, {
           type: 'error',
@@ -425,10 +448,17 @@ class EditorWindow extends ProjectRunningWindow {
       }
 
       settings.lastDirectory = path.dirname(filePath);
-      await settings.save();
+      try {
+        await settings.save();
+      } catch (error) {
+        if (lease) await projectProcess.cancel(lease);
+        throw error;
+      }
 
       const id = generateFileId();
-      this.openedFiles.set(id, new OpenedFile(TYPE_FILE, filePath));
+      const file = new OpenedFile(TYPE_FILE, filePath);
+      file.lease = lease;
+      this.openedFiles.set(id, file);
 
       return {
         id,
@@ -450,12 +480,23 @@ class EditorWindow extends ProjectRunningWindow {
       }
 
       const port = startEvent.ports[0];
+      if (!port) return;
+      if (projectProcess.worker && writing) {
+        port.postMessage({error: new Error('Another project write is in progress.')});
+        return;
+      }
 
       /** @type {NodeJS.WritableStream|null} */
       let writeStream = null;
+      let finishing = false;
+      let failed = false;
 
       const handleError = (error) => {
+        if (failed) return;
+        failed = true;
         console.error('Write stream error', error);
+        writing = false;
+        if (file.lease) void projectProcess.cancel(file.lease).catch(console.error);
         port.postMessage({
           error
         });
@@ -466,15 +507,22 @@ class EditorWindow extends ProjectRunningWindow {
       };
 
       try {
-        writeStream = await createAtomicWriteStream(file.path);
+        const verify = projectProcess.worker ? () => projectProcess.verify(file.lease) : undefined;
+        verify?.();
+        writing = true;
+        writeStream = await createAtomicWriteStream(file.path, verify);
       } catch (error) {
         handleError(error);
         return;
       }
 
       writeStream.on('atomic-error', handleError);
+      port.once('close', () => {
+        if (!finishing && !writeStream.destroyed) writeStream.emit('error', new Error('The renderer disconnected'));
+      });
 
       const handleMessage = (data) => {
+        if (finishing || failed) return;
         if (data.write) {
           if (writeStream.write(data.write)) {
             // Still more space in the buffer. Ask for more immediately.
@@ -485,10 +533,15 @@ class EditorWindow extends ProjectRunningWindow {
             writeStream.once('drain', resolve);
           });
         } else if (data.finish) {
+          finishing = true;
           // Wait for the atomic file write to complete.
-          return new Promise(resolve => {
+          return new Promise((resolve, reject) => {
             writeStream.once('atomic-finish', resolve);
+            writeStream.once('atomic-error', reject);
             writeStream.end();
+          }).then(async () => {
+            if (file.lease) await projectProcess.commit(file.lease);
+            writing = false;
           });
         } else if (data.abort) {
           writeStream.emit('error', new Error('Aborted by renderer process'));
@@ -509,7 +562,8 @@ class EditorWindow extends ProjectRunningWindow {
             }
           });
         } catch (error) {
-          handleError(error);
+          if (!finishing && !failed) writeStream.emit('error', error);
+          else handleError(error);
         }
       });
 
@@ -565,6 +619,14 @@ class EditorWindow extends ProjectRunningWindow {
 
     this.ipc.handle('check-drag-and-drop-path', (event, filePath) => {
       FileAccessWindow.check(filePath);
+    });
+
+    this.ipc.on('project-process-mode', event => { event.returnValue = projectProcess.worker; });
+    this.ipc.handle('open-dropped-projects', (event, files) => {
+      if (projectProcess.worker && Array.isArray(files) && files.length &&
+          files.every(file => typeof file === 'string' && /\.(sb3|sb2|sb)$/i.test(file) && path.isAbsolute(file))) {
+        return projectProcess.open(files);
+      }
     });
 
     /**
@@ -627,7 +689,8 @@ class EditorWindow extends ProjectRunningWindow {
       const projectUrl = params.get('project_url');
       const parsedFile = parseOpenedFile(projectUrl, null);
       if (parsedFile.type === TYPE_SAMPLE) {
-        new EditorWindow(parsedFile, null);
+        if (projectProcess.worker) void projectProcess.open([projectUrl]);
+        else new EditorWindow(parsedFile, null);
         return {
           action: 'deny'
         };
@@ -676,7 +739,12 @@ class EditorWindow extends ProjectRunningWindow {
    * @param {boolean} fullscreen
    */
   static newWindow (fullscreen) {
+    if (projectProcess.worker) return void projectProcess.open([]);
     new EditorWindow(null, fullscreen);
+  }
+
+  static openIsolatedProject (file, fullscreen) {
+    return new EditorWindow(file ? parseOpenedFile(file, process.cwd()) : null, fullscreen);
   }
 }
 

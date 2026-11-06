@@ -1,5 +1,5 @@
 const PLATFORM_NAME = 'TurboWarp';
-const APP_NAME = 'TurboWarp Desktop';
+const APP_NAME = 'TurboWarp Plus Desktop';
 const PACKAGER_NAME = 'TurboWarp Packager';
 
 module.exports = {

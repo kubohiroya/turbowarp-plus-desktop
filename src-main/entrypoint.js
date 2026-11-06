@@ -4,7 +4,7 @@
 
 const {app, dialog} = require('electron');
 
-const APP_NAME = 'TurboWarp Desktop';
+const APP_NAME = 'TurboWarp Plus Desktop';
 const stringifyError = (error) => (error && error.stack) ? error.stack : error;
 
 try {
@@ -20,7 +20,7 @@ try {
     });
   });
 
-  require('./index');
+  require('./project-process').bootstrap(() => require('./index'));
 } catch (error) {
   console.error('Error starting main process:', error);
   app.whenReady().then(() => {

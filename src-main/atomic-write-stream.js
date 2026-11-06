@@ -116,7 +116,7 @@ const copy = (from, to) => new Promise((resolve, reject) => {
   );
 });
 
-const createAtomicWriteStream = async (path) => {
+const createAtomicWriteStream = async (path, beforeReplace) => {
   const releaseFileLock = await acquireFileLock(path);
 
   const originalMode = await getOriginalMode(path);
@@ -190,6 +190,7 @@ const createAtomicWriteStream = async (path) => {
 
       const expectedHash = runningHash.digest('hex');
       try {
+        beforeReplace?.();
         await fsPromises.rename(tempPath, path);
 
         const finalHash = await sha512(path);
