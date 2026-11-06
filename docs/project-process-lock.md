@@ -21,7 +21,7 @@ TW_PLUS_DESKTOP_PROJECT_ISOLATION=1 npm run electron:start -- /absolute/path/Pro
 
 ## macOS の検証手順
 
-`TW_D3_TEST_SB3` には自動実行拡張を含まない試験用 SB3 を指定する。公式アプリは検証専用コピーの元として使う。テストは OS マウスを動かさず、明示した試験用パスをダイアログの結果として返し、実際の IPC、保存ストリーム、Electron プロセスとウィンドウを検証する。
+`npm ci` で依存を準備してから、`TW_D3_TEST_SB3` に自動実行拡張を含まない試験用 SB3 を指定する。公式アプリは検証専用コピーの元として使う。テストは OS マウスを動かさず、明示した試験用パスをダイアログの結果として返し、実際の IPC、保存ストリーム、Electron プロセスとウィンドウを検証する。
 
 ```sh
 node --test test/project-lock.test.js

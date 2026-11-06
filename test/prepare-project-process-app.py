@@ -29,7 +29,7 @@ paths = (
     "config/feature-flags.js", "src-main/atomic-write-stream.js", "src-main/brand.js",
     "src-main/entrypoint.js", "src-main/index.js", "src-main/project-lock.js",
     "src-main/project-process.js", "src-main/project-assets.js", "src-main/external-yaml-files.js", "src-main/windows/editor.js",
-    "src-main/workspace-layout-store.js", "src-preload/editor.js",
+    "src-main/standard-renderer-save.js", "src-main/workspace-layout-store.js", "src-preload/editor.js",
 )
 def overlay(name, contents):
     parents, leaf = name.split("/")[:-1], name.split("/")[-1]
@@ -61,9 +61,18 @@ if (process.env.TW_D3_TEST_DIALOG_PATH) {
   };
   dialog.showSaveDialog = async () => ({canceled: false, filePath: read().save});
   dialog.showErrorBox = (_, message) => console.error(message);
+  const showMessageBox = dialog.showMessageBox;
+  dialog.showMessageBox = (window, options) =>
+    options?.message.startsWith('The standard editor cannot overwrite') ?
+      Promise.resolve({response: 0}) : showMessageBox(window, options);
 }
 """ + contents
     overlay(name, contents)
+
+for dependency in ("yauzl", "buffer-crc32", "fd-slicer", "pend"):
+    for filename in ("package.json", "index.js"):
+        name = f"node_modules/{dependency}/{filename}"
+        overlay(name, (root / name).read_bytes())
 
 if args.renderer:
     assert (args.renderer / "gui.html").is_file()

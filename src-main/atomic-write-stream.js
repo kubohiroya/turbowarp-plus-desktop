@@ -190,7 +190,7 @@ const createAtomicWriteStream = async (path, beforeReplace) => {
 
       const expectedHash = runningHash.digest('hex');
       try {
-        beforeReplace?.();
+        await beforeReplace?.();
         await fsPromises.rename(tempPath, path);
 
         const finalHash = await sha512(path);
@@ -206,6 +206,7 @@ const createAtomicWriteStream = async (path, beforeReplace) => {
           //  - Much of the file saving process is still safe to abort at any time
           //    (Pure IO should be faster than zipping the project)
           //  - We still avoid keeping the entire file in memory at once
+          await beforeReplace?.();
           await copy(tempPath, path);
 
           // Per man fsync(2):

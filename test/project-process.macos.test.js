@@ -93,6 +93,7 @@ test('real Electron isolates two SB3s, prevents duplicate launch, and recovers a
   const second = path.join(dir, 'Bravo.sb3');
   const third = path.join(dir, 'Charlie.sb3');
   const cancelled = path.join(dir, 'Aborted.sb3');
+  const protectedDestination = path.join(dir, 'Plus.sb3');
   const alias = path.join(dir, 'Alias.sb2');
   const dialogPath = path.join(dir, 'test-dialog.json');
   const select = values => fs.writeFile(dialogPath, JSON.stringify(values));
@@ -194,6 +195,16 @@ test('real Electron isolates two SB3s, prevents duplicate launch, and recovers a
     await eventually('failed write released only the Save As reservation', async () => !(await lockFor(cancelled)));
     assert.equal((await lockFor(first)).token, firstOwner.token);
     await assert.rejects(fs.stat(cancelled), {code: 'ENOENT'});
+
+    const plusMetadata = JSON.stringify({targets: [], turboWarpPlusProject: {}});
+    await fs.writeFile(protectedDestination, plusMetadata);
+    await select({save: protectedDestination});
+    const protectedSave = await evaluate(alpha.page, 'EditorPreload.showSaveFilePicker("Plus.sb3")');
+    assert.equal((await lockFor(protectedDestination)).pid, firstOwner.pid);
+    await assert.rejects(writeViaPreload(alpha.page, protectedSave.id, false), /cannot overwrite a TurboWarp Plus project/);
+    await eventually('protected write released the Save As reservation', async () => !(await lockFor(protectedDestination)));
+    assert.equal((await lockFor(first)).token, firstOwner.token);
+    assert.equal(await fs.readFile(protectedDestination, 'utf8'), plusMetadata);
 
     await select({save: third});
     const destination = await evaluate(alpha.page, 'EditorPreload.showSaveFilePicker("Charlie.sb3")');

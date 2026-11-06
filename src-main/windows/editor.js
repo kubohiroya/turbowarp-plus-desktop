@@ -12,6 +12,7 @@ const PrivacyWindow = require('./privacy');
 const AboutWindow = require('./about');
 const PackagerWindow = require('./packager');
 const {createAtomicWriteStream} = require('../atomic-write-stream');
+const {assertStandardRendererCanOverwrite, denialCode} = require('../standard-renderer-save');
 const {translate, updateLocale, getStrings} = require('../l10n');
 const {APP_NAME} = require('../brand');
 const prompts = require('../prompts');
@@ -511,6 +512,11 @@ class EditorWindow extends ProjectRunningWindow {
         console.error('Write stream error', error);
         writing = false;
         if (file.lease) void projectProcess.cancel(file.lease).catch(console.error);
+        if (error.code === denialCode && !this.window.isDestroyed()) {
+          void dialog.showMessageBox(this.window, {
+            type: 'warning', title: APP_NAME, message: error.message, noLink: true
+          }).catch(console.error);
+        }
         port.postMessage({
           error
         });
@@ -522,9 +528,14 @@ class EditorWindow extends ProjectRunningWindow {
 
       try {
         const verify = projectProcess.worker ? () => projectProcess.verify(file.lease) : undefined;
+        const beforeReplace = plusRenderer ? verify : async () => {
+          await assertStandardRendererCanOverwrite(file.path);
+          verify?.();
+        };
         verify?.();
         writing = true;
-        writeStream = await createAtomicWriteStream(file.path, verify);
+        if (!plusRenderer) await assertStandardRendererCanOverwrite(file.path);
+        writeStream = await createAtomicWriteStream(file.path, beforeReplace);
       } catch (error) {
         handleError(error);
         return;
