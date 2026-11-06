@@ -1,6 +1,10 @@
 const {contextBridge, ipcRenderer} = require('electron');
 
 contextBridge.exposeInMainWorld('EditorPreload', {
+  workspaceLayout: ipcRenderer.sendSync('workspace-layout-enabled') === true ? {
+    read: () => ipcRenderer.sendSync('read-workspace-layout'),
+    write: raw => { ipcRenderer.sendSync('write-workspace-layout', raw); }
+  } : null,
   externalYaml: ipcRenderer.sendSync('external-yaml-enabled') === true ? {
     open: () => ipcRenderer.invoke('open-external-yaml'),
     save: (id, revision, source) => ipcRenderer.invoke('save-external-yaml', id, revision, source),
