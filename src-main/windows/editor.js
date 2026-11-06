@@ -22,7 +22,7 @@ const ExtensionDocumentationWindow = require('./extension-documentation.js');
 const SecurityPromptWindow = require('./security-prompt');
 const projectProcess = require('../project-process');
 const {isSB3} = require('../project-lock');
-const {projectJSONTransfer} = require('../../config/feature-flags');
+const {projectJSONTransfer, projectAssetTransfer} = require('../../config/feature-flags');
 
 const TYPE_FILE = 'file';
 const TYPE_URL = 'url';
@@ -626,6 +626,24 @@ class EditorWindow extends ProjectRunningWindow {
     this.ipc.on('project-json-transfer-enabled', event => {
       event.returnValue = projectProcess.worker && projectJSONTransfer;
     });
+    const assetsEnabled = projectProcess.worker && projectAssetTransfer;
+    this.ipc.on('project-asset-transfer-enabled', event => { event.returnValue = assetsEnabled; });
+    if (assetsEnabled) {
+      let pending = false;
+      const oneAssetOperation = handler => async (event, ...args) => {
+        if (pending) throw new Error('A project asset transfer is already running.');
+        pending = true;
+        try {
+          return await handler(...args);
+        } finally {
+          pending = false;
+        }
+      };
+      this.ipc.handle('stage-transfer-asset', oneAssetOperation(projectProcess.stageTransferAsset));
+      this.ipc.handle('read-transfer-asset', oneAssetOperation(async (transferId, asset) =>
+        new Uint8Array(await projectProcess.readTransferAsset(transferId, asset))));
+      this.ipc.handle('discard-transfer-asset', oneAssetOperation(projectProcess.discardTransferAsset));
+    }
     this.ipc.handle('open-dropped-projects', (event, files) => {
       if (projectProcess.worker && Array.isArray(files) && files.length &&
           files.every(file => typeof file === 'string' && /\.(sb3|sb2|sb)$/i.test(file) && path.isAbsolute(file))) {

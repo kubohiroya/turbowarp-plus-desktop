@@ -3,7 +3,8 @@ const path = require('node:path');
 const {spawn} = require('node:child_process');
 const {randomUUID} = require('node:crypto');
 const {app, dialog} = require('electron');
-const {projectIsolation} = require('../config/feature-flags');
+const {projectIsolation, projectAssetTransfer} = require('../config/feature-flags');
+const {ProjectAssets, validAssetInput} = require('./project-assets');
 const {ProjectLocks, ProjectBusy, identify, isSB3, assertOwned} = require('./project-lock');
 
 const dataRoot = process.env.TW_PLUS_DESKTOP_DATA_DIR ||
@@ -39,6 +40,7 @@ const launcher = () => {
   if (!app.requestSingleInstanceLock()) return app.exit();
   // Only this process can recover or replace records, including after launcher restart.
   const locks = new ProjectLocks(path.join(dataRoot, 'project-locks'));
+  const assets = projectAssetTransfer && new ProjectAssets(path.join(dataRoot, 'project-transfers'));
   const children = new Map();
   const queued = [];
   let started = false;
@@ -55,6 +57,7 @@ const launcher = () => {
         if (app.commandLine.hasSwitch('remote-debugging-port')) options.push('--remote-debugging-port=0');
         const child = spawn(process.execPath, options, {
           stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+          serialization: assets ? 'advanced' : 'json',
           env: {...process.env, TW_PLUS_DESKTOP_PROJECT_ROLE: 'worker', TW_PLUS_DESKTOP_PROJECT_PROFILE: childProfile}
         });
         const leases = new Map();
@@ -77,7 +80,8 @@ const launcher = () => {
           const lease = identity && locks.acquire(identity, child.pid);
           if (lease) leases.set(lease.token, lease);
           let active = lease;
-          child.on('message', message => {
+          const transferOwner = Symbol();
+          child.on('message', async message => {
             const {id, command, args} = message;
             const reply = (result, error) => {
               if (child.connected) child.send({id, result, error}, () => {});
@@ -114,6 +118,12 @@ const launcher = () => {
                   active = null;
                 }
                 reply(true);
+              } else if (assets && command === 'stage-transfer-asset') {
+                reply(await assets.stage(transferOwner, args.kind, args.bytes));
+              } else if (assets && command === 'read-transfer-asset') {
+                reply(await assets.read(args.transferId, args.asset));
+              } else if (assets && command === 'discard-transfer-asset') {
+                reply(await assets.discard(transferOwner, args.transferId));
               }
             } catch (error) {
               reply(null, error.message);
@@ -137,6 +147,11 @@ const launcher = () => {
   };
 
   fs.mkdirSync(path.join(dataRoot, 'project-processes'), {recursive: true, mode: 0o700});
+  if (assets) {
+    const sweep = () => assets.sweep().catch(error => { console.error(error.message); });
+    void sweep();
+    setInterval(sweep, 60_000).unref();
+  }
   app.on('open-file', (event, file) => {
     event.preventDefault();
     if (started) open([file], false, process.cwd());
@@ -234,8 +249,15 @@ const bootstrap = runEditor => {
   return runEditor();
 };
 
+const stageTransferAsset = (kind, bytes) => {
+  if (!validAssetInput(kind, bytes)) throw new Error('Invalid project transfer asset.');
+  return request('stage-transfer-asset', {kind, bytes});
+};
+
 module.exports = {
-  bootstrap, worker, open, reserve, cancel, commit, detach, verify, ready,
+  bootstrap, worker, open, reserve, cancel, commit, detach, verify, ready, stageTransferAsset,
+  readTransferAsset: (transferId, asset) => request('read-transfer-asset', {transferId, asset}),
+  discardTransferAsset: transferId => request('discard-transfer-asset', {transferId}),
   initialLease: () => activeLease,
   setEditor: window => { editor = window; }
 };

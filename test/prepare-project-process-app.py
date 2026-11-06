@@ -28,7 +28,8 @@ data = bytearray(archive[8 + header_size:])
 paths = (
     "config/feature-flags.js", "src-main/atomic-write-stream.js", "src-main/brand.js",
     "src-main/entrypoint.js", "src-main/index.js", "src-main/project-lock.js",
-    "src-main/project-process.js", "src-main/windows/editor.js", "src-preload/editor.js",
+    "src-main/project-process.js", "src-main/project-assets.js", "src-main/windows/editor.js",
+    "src-preload/editor.js",
 )
 def overlay(name, contents):
     parents, leaf = name.split("/")[:-1], name.split("/")[-1]

@@ -1,6 +1,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {spawn, execFileSync} = require('node:child_process');
+const {createHash} = require('node:crypto');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -82,12 +83,108 @@ async function browserDrop (page, surface, data) {
   }
 }
 
-test('two Desktop projects transfer scripts and YAML via the OS clipboard and cross-process drag data', {
+async function checkAssetVault (t, source, destination, profile, sourcePid) {
+  const sample = Buffer.alloc(44 + 1600);
+  sample.write('RIFF', 0);
+  sample.writeUInt32LE(sample.length - 8, 4);
+  sample.write('WAVEfmt ', 8);
+  sample.writeUInt32LE(16, 16);
+  sample.writeUInt16LE(1, 20);
+  sample.writeUInt16LE(1, 22);
+  sample.writeUInt32LE(8000, 24);
+  sample.writeUInt32LE(16000, 28);
+  sample.writeUInt16LE(2, 32);
+  sample.writeUInt16LE(16, 34);
+  sample.write('data', 36);
+  sample.writeUInt32LE(sample.length - 44, 40);
+
+  const staged = await source.evaluate(async sampleBytes => {
+    const costume = vm.editingTarget.getCostumes()[0];
+    const sourceBytes = costume.asset.data;
+    const transfer = EditorPreload.projectAssetTransfer;
+    const make = async (kind, bytes, payload) =>
+      ({version: 1, kind, ...await transfer.stage(kind, bytes), payload});
+    return {
+      costume: await make('costume', sourceBytes, {
+        name: 'D5 transferred costume', format: costume.asset.dataFormat,
+        rotationCenterX: costume.rotationCenterX, rotationCenterY: costume.rotationCenterY
+      }),
+      sound: await make('sound', Uint8Array.from(sampleBytes), {name: 'D5 transferred sound', format: 'wav'}),
+      cancelled: await make('sound', Uint8Array.from([1]), {})
+    };
+  }, Array.from(sample));
+  for (const envelope of [staged.costume, staged.sound]) {
+    const asset = envelope.assets[0];
+    const stored = await fs.readFile(path.join(profile, 'project-transfers', envelope.transferId + '.' + asset.kind));
+    assert.equal(stored.length, asset.size);
+    assert.equal(createHash('sha256').update(stored).digest('hex'), asset.sha256);
+    assert(!JSON.stringify(envelope).includes(stored.toString('base64')));
+    if (asset.kind === 'sound') assert.deepEqual(stored, sample);
+  }
+  assert.equal(await destination.evaluate(id => EditorPreload.projectAssetTransfer.discard(id),
+    staged.cancelled.transferId), false);
+  assert.equal(await source.evaluate(id => EditorPreload.projectAssetTransfer.discard(id),
+    staged.cancelled.transferId), true);
+  await source.close();
+  await expectEventually('source process exited', () => {
+    try {
+      process.kill(sourcePid, 0);
+      return false;
+    } catch (error) {
+      if (error.code === 'ESRCH') return true;
+      throw error;
+    }
+  });
+  const counts = () => destination.evaluate(() => [
+    vm.editingTarget.getCostumes().length, vm.editingTarget.getSounds().length
+  ]);
+  const before = await counts();
+  for (const envelope of [staged.cancelled, {...staged.costume, assets: [{...staged.costume.assets[0], sha256: '0'.repeat(64)}]}]) {
+    await assert.rejects(destination.evaluate(envelope =>
+      EditorPreload.projectAssetTransfer.read(envelope.transferId, envelope.assets[0]), envelope), /missing, expired, or invalid/);
+    assert.deepEqual(await counts(), before);
+  }
+  const loaded = await destination.evaluate(async ({costume, sound}) => {
+    const target = vm.editingTarget;
+    const {storage, renderer} = vm.runtime;
+    const transfer = EditorPreload.projectAssetTransfer;
+    const importAsset = async (envelope, type) => {
+      const bytes = await transfer.read(envelope.transferId, envelope.assets[0]);
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+        .map(value => value.toString(16).padStart(2, '0')).join('');
+      const {name, format, rotationCenterX, rotationCenterY} = envelope.payload;
+      const asset = storage.createAsset(type, format, bytes, null, true);
+      const md5 = asset.assetId + '.' + format;
+      const item = {name, asset, assetId: asset.assetId, md5, dataFormat: format, rotationCenterX, rotationCenterY};
+      if (envelope.kind === 'costume') await vm.addCostume(md5, item, target.id);
+      else await vm.addSound(item, target.id);
+      return digest;
+    };
+    const costumeDigest = await importAsset(costume, storage.AssetType.ImageVector);
+    const soundDigest = await importAsset(sound, storage.AssetType.Sound);
+    const importedCostume = target.getCostumes().at(-1);
+    const importedSound = target.getSounds().at(-1);
+    return {costumeDigest, soundDigest, skin: renderer.getSkinSize(importedCostume.skinId),
+      samples: vm.getSoundBuffer(target.getSounds().length - 1)?.length,
+      broken: Boolean(importedCostume.broken || importedSound.broken)};
+  }, staged);
+  assert.equal(loaded.costumeDigest, staged.costume.assets[0].sha256);
+  assert.equal(loaded.soundDigest, staged.sound.assets[0].sha256);
+  assert(loaded.skin.every(size => size > 0));
+  assert(loaded.samples > 0);
+  assert.equal(loaded.broken, false);
+  assert.deepEqual(await counts(), before.map(count => count + 1));
+  t.diagnostic('Two project processes exchanged and decoded real SVG and WAV assets after closing the source window.');
+}
+
+test(process.env.TW_D5_TEST_ASSETS === '1' ? 'Desktop project processes resolve a shared binary asset' :
+  'two Desktop projects transfer scripts and YAML via the OS clipboard and cross-process drag data', {
   skip: process.platform !== 'darwin' || !process.env.TW_D4_TEST_APP,
   timeout: 155000
 }, async t => {
   const {chromium} = require(process.env.TW_D4_PLAYWRIGHT);
   const enabled = process.env.TW_D4_TEST_ENABLED !== '0';
+  const assets = enabled && process.env.TW_D5_TEST_ASSETS === '1';
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-d4-transfer-'));
   const profile = path.join(work, 'data');
   const first = path.join(work, 'D4 Source.sb3');
@@ -96,7 +193,7 @@ test('two Desktop projects transfer scripts and YAML via the OS clipboard and cr
   const logPath = path.join(work, 'electron.log');
   const log = await fs.open(logPath, 'a');
   const snapshot = operation => execFileSync('swift', [path.join(__dirname, 'clipboard-snapshot.swift'), operation, clipboard]);
-  snapshot('save');
+  if (!assets) snapshot('save');
   const sessions = [];
   let broker;
   t.after(async () => {
@@ -104,7 +201,7 @@ test('two Desktop projects transfer scripts and YAML via the OS clipboard and cr
     if (broker) {
       try { process.kill(-broker.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
     }
-    snapshot('restore');
+    if (!assets) snapshot('restore');
     await fs.rm(clipboard, {force: true});
     await log.close();
   });
@@ -114,7 +211,7 @@ test('two Desktop projects transfer scripts and YAML via the OS clipboard and cr
   broker = spawn(binary, ['--remote-debugging-port=0', first, second], {
     cwd: work, stdio: ['ignore', log.fd, log.fd], detached: true,
     env: {...process.env, TW_PLUS_DESKTOP_PROJECT_ISOLATION: '1', TW_PLUS_DESKTOP_JSON_TRANSFER: enabled ? '1' : '0',
-      TW_PLUS_DESKTOP_DATA_DIR: profile}
+      TW_PLUS_DESKTOP_ASSET_TRANSFER: assets ? '1' : '0', TW_PLUS_DESKTOP_DATA_DIR: profile}
   });
   const nameOf = page => page.evaluate(() => EditorPreload.getInitialFile()
     .then(id => EditorPreload.getFile(id)).then(file => file.name));
@@ -142,6 +239,7 @@ test('two Desktop projects transfer scripts and YAML via the OS clipboard and cr
       await page.waitForFunction(() => window.vm?.runtime.extensionStorage.twpeyamlsettings?.documents &&
         window.ScratchBlocks?.getMainWorkspace() && !vm.editingTarget?.isStage);
       assert.equal(await page.evaluate(() => EditorPreload.projectJSONTransfer), enabled);
+      assert.equal(await page.evaluate(() => Boolean(EditorPreload.projectAssetTransfer)), assets);
       return {page, context, name: await nameOf(page)};
     }));
     const {page: A, context: sender} = pages.find(item => item.name === 'D4 Source.sb3');
@@ -155,6 +253,12 @@ test('two Desktop projects transfer scripts and YAML via the OS clipboard and cr
       const pane = B.locator('.twpe-yaml-dialog[open]');
       await pane.waitFor();
       assert.equal(await pane.getByRole('button', {name: /^(Paste YAML|YAML を貼り付け)$/}).count(), 0);
+      return;
+    }
+    if (assets) {
+      const sourceLock = records.find(record => path.basename(record.path) === path.basename(first));
+      assert(sourceLock);
+      await checkAssetVault(t, A, B, profile, sourceLock.pid);
       return;
     }
     await A.bringToFront();
