@@ -17,7 +17,7 @@ python3 test/prepare-project-process-app.py /Applications/TurboWarp.app "$work/T
 TW_D4_TEST_APP="$work/TurboWarp Plus D4.app" \
   TW_D4_TEST_SB3=/absolute/path/to/settings.sb3 \
   TW_D4_PLAYWRIGHT=/absolute/path/to/editor/node_modules/playwright \
-  node --test test/project-json-transfer.macos.test.js
+  npm run test:macos:project-transfer
 ```
 
 `TW_D4_TEST_ENABLED=0` を追加すると、切り戻し時の操作の非表示と既存の YAML 文書表示を検証する。

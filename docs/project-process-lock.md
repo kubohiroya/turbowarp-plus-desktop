@@ -28,5 +28,5 @@ node --test test/project-lock.test.js
 work=$(mktemp -d)
 python3 test/prepare-project-process-app.py /Applications/TurboWarp.app "$work/TurboWarp Plus D3.app"
 TW_D3_TEST_APP="$work/TurboWarp Plus D3.app" TW_D3_TEST_SB3=/absolute/path/fixture.sb3 \
-  node --test test/project-process.macos.test.js
+  npm run test:macos:project-process
 ```

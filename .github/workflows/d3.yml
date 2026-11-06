@@ -44,4 +44,4 @@ jobs:
           export TW_D3_TEST_APP="$RUNNER_TEMP/TurboWarp Plus D3.app"
           export TW_D3_TEST_SB3="$RUNNER_TEMP/project-process-fixture.sb3"
           python3 test/project-process-fixture.py "$TW_D3_TEST_SB3"
-          node --test test/project-process.macos.test.js
+          npm run test:macos:project-process

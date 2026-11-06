@@ -9,6 +9,10 @@
   },
   "type": "commonjs",
   "scripts": {
+    "test": "node --test test/external-yaml-files.test.js test/project-assets.test.js test/project-lock.test.js test/standard-renderer-save.test.js test/workspace-layout-store.test.js",
+    "test:macos:project-process": "TW_PLUS_DESKTOP_NATIVE_TESTS=1 node --test test/project-process.macos.test.js",
+    "test:macos:project-transfer": "TW_PLUS_DESKTOP_NATIVE_TESTS=1 node --test test/project-json-transfer.macos.test.js",
+    "test:macos:workspace-layout": "TW_PLUS_DESKTOP_NATIVE_TESTS=1 node --test test/workspace-layout.macos.test.js",
     "fetch": "node scripts/download-library-files.mjs && node scripts/download-packager.mjs && node scripts/prepare-extensions.mjs",
     "webpack:compile": "webpack",
     "webpack:plus": "node scripts/build-plus-renderer.mjs",
