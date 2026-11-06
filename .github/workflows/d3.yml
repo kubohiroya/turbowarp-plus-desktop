@@ -1,0 +1,45 @@
+name: D3 project process
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test test/project-lock.test.js
+
+  electron:
+    runs-on: macos-15
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Prepare the pinned Desktop test app
+        run: |
+          dmg="$RUNNER_TEMP/tw-desktop-1.17.1.dmg"
+          mount="$RUNNER_TEMP/tw-desktop-upstream"
+          curl --fail --location --retry 3 --output "$dmg" \
+            https://github.com/TurboWarp/desktop/releases/download/v1.17.1/TurboWarp-Setup-1.17.1.dmg
+          printf '%s  %s\n' '2c6f80e178a2dce44272c4aaf57375885533a0f9799a7ebb39bbf93733f7e34d' "$dmg" | shasum -a 256 --check
+          mkdir -p "$mount"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$dmg"
+          trap 'hdiutil detach "$mount"' EXIT
+          python3 test/prepare-project-process-app.py "$mount/TurboWarp.app" "$RUNNER_TEMP/TurboWarp Plus D3.app"
+      - name: Verify the project lifecycle on macOS
+        run: |
+          export TW_D3_TEST_APP="$RUNNER_TEMP/TurboWarp Plus D3.app"
+          export TW_D3_TEST_SB3="$RUNNER_TEMP/project-process-fixture.sb3"
+          python3 test/project-process-fixture.py "$TW_D3_TEST_SB3"
+          node --test test/project-process.macos.test.js
