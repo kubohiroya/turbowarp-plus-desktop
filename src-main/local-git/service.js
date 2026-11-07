@@ -3,6 +3,7 @@ const {createGitHubAuth, GitServiceError} = require('./github-auth');
 const {parseRemote, startGitProxy} = require('./git-proxy');
 
 const SESSION_MS = 5 * 60_000;
+const MAX_PUSH_IDS = 256;
 const sameRemote = (a, b) => a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase();
 
 async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait, store} = {}) {
@@ -11,6 +12,12 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
   let revision = 0;
   let session = null;
   let closed = false;
+
+  function expired (selected) {
+    if (selected.public.expiresAt > now()) return false;
+    selected.pushIds.clear();
+    return true;
+  }
 
   function reset () {
     lifetime.abort();
@@ -32,10 +39,10 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
 
   const proxy = await startGitProxy({
     request,
-    async authorize (bearer, route, signal) {
+    async authorize (bearer, route, signal, pushId) {
       const selected = session;
       if (!selected || selected.public.bearer !== bearer) throw new GitServiceError(401, 'SESSION_REQUIRED');
-      if (selected.public.expiresAt <= now()) throw new GitServiceError(401, 'SESSION_EXPIRED');
+      if (expired(selected)) throw new GitServiceError(401, 'SESSION_EXPIRED');
       if (!sameRemote(route, selected.remote) || (route.write && !selected.write)) {
         throw new GitServiceError(403, 'FORBIDDEN');
       }
@@ -44,8 +51,13 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
       requestSignal.throwIfAborted();
       const verified = await repository(selected.repository, route.write, accessToken, requestSignal);
       requestSignal.throwIfAborted();
-      if (selected.public.expiresAt <= now()) throw new GitServiceError(401, 'SESSION_EXPIRED');
+      if (expired(selected)) throw new GitServiceError(401, 'SESSION_EXPIRED');
       if (verified.id !== selected.repository.id) throw new GitServiceError(403, 'FORBIDDEN');
+      if (pushId) {
+        if (selected.pushIds.has(pushId)) throw new GitServiceError(409, 'PUSH_DUPLICATE');
+        if (selected.pushIds.size >= MAX_PUSH_IDS) throw new GitServiceError(429, 'RATE_LIMITED');
+        selected.pushIds.add(pushId);
+      }
       return {accessToken, repository: verified, signal: selected.controller.signal};
     },
     async resolveRedirect (current, candidate, accessToken, signal) {
@@ -87,11 +99,11 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
         expiresAt: Math.min(expiresAt, now() + SESSION_MS), bearer: randomBytes(32).toString('base64url')
       });
       session?.controller.abort();
-      session = {remote, write, repository: approved, controller: new AbortController(), public: publicSession};
+      session = {remote, write, repository: approved, controller: new AbortController(), public: publicSession, pushIds: new Set()};
       return publicSession;
     },
     getSession () {
-      return session?.public.expiresAt > now() ? session.public : null;
+      return session && !expired(session) ? session.public : null;
     },
     async disconnect () {
       reset();

@@ -11,6 +11,7 @@ const upload = '/info/refs?service=git-upload-pack';
 const receive = '/git-receive-pack';
 const readType = 'application/x-git-upload-pack-advertisement';
 const writeType = 'application/x-git-receive-pack-request';
+const pushId = '00000000-0000-4000-8000-000000000001';
 
 function tokens (suffix = 'one', expires = 3600) {
   return {access_token: 'ghu_' + suffix, refresh_token: 'ghr_' + suffix, expires_in: expires, refresh_token_expires_in: 7200};
@@ -150,7 +151,7 @@ test('loopback proxy checks origin, host, route, bearer, scope and body before c
     }).on('error', reject).end();
   });
   assert.equal(host, 403);
-  const post = {method: 'POST', headers: {'Content-Type': writeType}};
+  const post = {method: 'POST', headers: {'Content-Type': writeType, 'Git-Push-Id': pushId}};
   await error(call(service, session, route + receive, {...post,
     body: new ReadableStream({start (controller) { controller.enqueue(Uint8Array.of(1)); controller.close(); }}),
     duplex: 'half'
@@ -176,10 +177,16 @@ test('loopback proxy checks origin, host, route, bearer, scope and body before c
   const write = await service.createSession(desktopRemote, true);
   await error(call(service, session), 401, 'SESSION_REQUIRED');
   const bytes = Uint8Array.of(4, 5, 6);
+  await error(call(service, write, route + receive, {method: 'POST', headers: {'Content-Type': writeType}, body: bytes}),
+    400, 'BAD_REQUEST');
+  await error(call(service, write, route + receive, {...post, headers: {...post.headers, 'Git-Push-Id': 'invalid'}, body: bytes}),
+    400, 'BAD_REQUEST');
+  await error(call(service, write, route + upload, {headers: {'Git-Push-Id': pushId}}), 400, 'BAD_REQUEST');
   const pushed = await call(service, write, route + receive, {...post, body: bytes});
   assert.equal(pushed.status, 200);
   await pushed.arrayBuffer();
   assert.deepEqual(transmitted, bytes);
+  await error(call(service, write, route + receive, {...post, body: bytes}), 409, 'PUSH_DUPLICATE');
 
   upstream.advance(5 * 60_000);
   assert.equal(service.getSession(), null);
@@ -187,6 +194,50 @@ test('loopback proxy checks origin, host, route, bearer, scope and body before c
   const latest = await service.createSession(desktopRemote);
   service.disconnect();
   await error(call(service, latest), 401, 'SESSION_REQUIRED');
+});
+
+test('receive-pack reserves a push ID before egress and retains it after failure', {timeout: 10000}, async t => {
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const upstream = fixture(async (_url, options) => {
+    assert.equal(options.headers['Git-Push-Id'], undefined);
+    await new Response(options.body).arrayBuffer();
+    entered.resolve();
+    await release.promise;
+    return new Response(null, {status: 502});
+  });
+  const service = await start(t, upstream);
+  const session = await service.createSession(desktopRemote, true);
+  const preflight = headers => call(service, null, route + receive, {method: 'OPTIONS', headers: {
+    'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': headers
+  }});
+  assert.equal((await preflight('authorization, content-type, git-push-id')).status, 204);
+  await error(call(service, null, '/v1/git/owner/project.git/git-upload-pack', {method: 'OPTIONS', headers: {
+    'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'git-push-id'
+  }}), 403, 'FORBIDDEN');
+  const post = (id = pushId) => call(service, session, route + receive, {
+    method: 'POST', headers: {'Content-Type': writeType, 'Git-Push-Id': id}, body: Uint8Array.of(1)
+  });
+  const first = post();
+  try {
+    await entered.promise;
+    await error(post(), 409, 'PUSH_DUPLICATE');
+  } finally {
+    release.resolve();
+  }
+  await error(first, 502, 'UPSTREAM_FAILURE');
+  await error(post(), 409, 'PUSH_DUPLICATE');
+  const pushes = () => upstream.calls.filter(({url}) => url.endsWith(receive)).length;
+  assert.equal(pushes(), 1);
+  for (let index = 2; index <= 256; index++) {
+    const id = '00000000-0000-4000-8000-' + String(index).padStart(12, '0');
+    await error(post(id), 502, 'UPSTREAM_FAILURE');
+  }
+  await error(post('00000000-0000-4000-8000-000000000257'), 429, 'RATE_LIMITED');
+  await error(post(), 409, 'PUSH_DUPLICATE');
+  assert.equal(pushes(), 256);
+  upstream.advance(5 * 60_000);
+  await error(post(), 401, 'SESSION_EXPIRED');
 });
 
 test('only one discovery redirect may target the same repository ID and RPC is never replayed', async t => {
@@ -206,7 +257,9 @@ test('only one discovery redirect may target the same repository ID and RPC is n
   }
   const gitCalls = () => upstream.calls.filter(call => call.url.startsWith('https://github.com/owner/'));
   const firstPost = gitCalls().length;
-  await error(call(service, session, route + receive, {method: 'POST', headers: {'Content-Type': writeType}, body: Uint8Array.of(1)}),
+  await error(call(service, session, route + receive, {
+    method: 'POST', headers: {'Content-Type': writeType, 'Git-Push-Id': pushId}, body: Uint8Array.of(1)
+  }),
     409, 'REDIRECT_REJECTED');
   assert.equal(gitCalls().length, firstPost + 1);
   redirect = 'renamed';

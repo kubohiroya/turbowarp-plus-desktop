@@ -7,6 +7,7 @@ const {GitServiceError} = require('./github-auth');
 const GITHUB = 'https://github.com';
 const EDITOR_ORIGIN = 'tw-editor://.';
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024;
+const pushIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const names = '([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9_.-]+?)';
 const gitPath = new RegExp('^/' + names +
   '\\.git(/info/refs\\?service=(git-upload-pack|git-receive-pack)|/(git-upload-pack|git-receive-pack))$', 'u');
@@ -61,10 +62,12 @@ async function startGitProxy ({
     const route = req.url.startsWith('/v1/git/') && parseGitPath(req.url.slice('/v1/git'.length), method);
     if (!route) return fail(res, 400, 'BAD_REQUEST');
     const post = method === 'POST';
+    const push = post && route.write;
 
     if (preflight) {
       res.setHeader('Vary', 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers');
       const allowed = post ? ['authorization', 'content-type'] : ['authorization'];
+      if (push) allowed.push('git-push-id');
       const requested = (req.headers['access-control-request-headers'] || '').toLowerCase().split(',')
         .map(header => header.trim()).filter(Boolean);
       if (requested.some(header => !allowed.includes(header))) return fail(res, 403, 'FORBIDDEN');
@@ -86,13 +89,17 @@ async function startGitProxy ({
     } else if ((length !== undefined && length !== '0') || req.headers['transfer-encoding']) {
       return fail(res, 400, 'BAD_REQUEST');
     }
+    const pushId = req.headers['git-push-id'];
+    if (push ? !pushIdPattern.test(pushId ?? '') || req.headersDistinct['git-push-id']?.length !== 1 : pushId !== undefined) {
+      return fail(res, 400, 'BAD_REQUEST');
+    }
 
     const cancellation = new AbortController();
     const timeout = AbortSignal.timeout(120_000);
     res.once('close', () => { if (!res.writableFinished) cancellation.abort(); });
     const requestSignal = AbortSignal.any([cancellation.signal, timeout]);
     try {
-      const {accessToken, repository, signal: sessionSignal} = await authorize(bearer[1], route, requestSignal);
+      const {accessToken, repository, signal: sessionSignal} = await authorize(bearer[1], route, requestSignal, pushId);
       const signal = AbortSignal.any([requestSignal, sessionSignal]);
       signal.throwIfAborted();
       const type = 'application/x-' + route.service + (post ? '-result' : '-advertisement');
