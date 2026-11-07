@@ -1,4 +1,7 @@
 const original = 'frame.src = URL.createObjectURL(e.data.blob);';
+const originalBakeWrapper = '(function(Scratch) { ${await Z.fetchExtensionScript(n)} })(Scratch);';
+// A fetched script can end in a line comment without a terminating newline.
+const bakeWrapper = '(function(Scratch) { ${await Z.fetchExtensionScript(n)}\\n})(Scratch);';
 
 // The data document has its own opaque origin. Its blob inherits that origin
 // without forcing a new opaque origin on the SVG renderer's nested iframe.
@@ -31,5 +34,9 @@ export const patchPackagerPreview = (html) => {
   if (match < 0 || match !== html.lastIndexOf(original)) {
     throw new Error('The pinned Packager preview template has changed');
   }
-  return html.replace(original, () => replacement);
+  const bakeMatch = html.indexOf(originalBakeWrapper);
+  if (bakeMatch < 0 || bakeMatch !== html.lastIndexOf(originalBakeWrapper)) {
+    throw new Error('The pinned Packager extension wrapper has changed');
+  }
+  return html.replace(original, () => replacement).replace(originalBakeWrapper, () => bakeWrapper);
 };
