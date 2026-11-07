@@ -12,12 +12,14 @@ class GitServiceError extends Error {
   }
 }
 
-function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = delay} = {}) {
+function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = delay, store} = {}) {
   if (typeof clientId !== 'string' || !safeToken.test(clientId)) throw new Error('Invalid GitHub App client ID');
   let lifetime = new AbortController();
   let deviceFlow = null;
   let credentials = null;
   let pending = null;
+  let remember = false;
+  let remembered = false;
 
   const unauthorized = () => new GitServiceError(401, 'REAUTH_REQUIRED');
 
@@ -77,9 +79,10 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
     };
   }
 
-  async function begin () {
+  async function begin (persist = false) {
     const {signal} = lifetime;
     if (deviceFlow || pending) throw new GitServiceError(409, 'AUTH_IN_PROGRESS');
+    remember = persist;
     deviceFlow = {};
     try {
       const response = await oauth('https://github.com/login/device/code', {scope: 'offline_access'}, signal);
@@ -114,8 +117,16 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
       const user = await github('/user', tokens.accessToken, signal);
       signal.throwIfAborted();
       if (typeof user.login !== 'string' || !user.login) throw unauthorized();
-      credentials = {...tokens, account: {login: user.login}};
-      return credentials;
+      const updated = {...tokens, account: {login: user.login}};
+      const saved = !!(remember && await store?.write(updated, signal));
+      signal.throwIfAborted();
+      if (store && !saved) {
+        await store.clear().catch(() => { throw new GitServiceError(500, 'STORAGE_FAILURE'); });
+      }
+      signal.throwIfAborted();
+      remembered = saved;
+      credentials = updated;
+      return updated;
     }
     throw unauthorized();
   }
@@ -133,7 +144,7 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
     const result = await track(poll(deviceFlow, signal).finally(() => {
       if (!signal.aborted) deviceFlow = null;
     }), signal);
-    return {account: result.account, expiresAt: result.expiresAt};
+    return {account: result.account, expiresAt: result.expiresAt, remembered};
   }
 
   async function refresh (current, signal) {
@@ -143,10 +154,20 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
       }, signal);
       const updated = acceptTokens(response);
       signal.throwIfAborted();
-      credentials = {...updated, account: current.account};
-      return credentials;
+      const renewed = {...updated, account: current.account};
+      const saved = !!(remember && await store?.write(renewed, signal));
+      signal.throwIfAborted();
+      if (remember && store && !saved) await store.clear().catch(() => {});
+      signal.throwIfAborted();
+      remembered = saved;
+      credentials = renewed;
+      return renewed;
     } catch (error) {
-      if (!signal.aborted && error.status === 401) credentials = null;
+      if (!signal.aborted && error.status === 401) {
+        credentials = null;
+        remembered = false;
+        await store?.clear().catch(() => {});
+      }
       throw error;
     }
   }
@@ -161,14 +182,41 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
     return pending ?? track(refresh(credentials, lifetime.signal), lifetime.signal);
   }
 
+  async function restore () {
+    const {signal} = lifetime;
+    if (!store || deviceFlow || pending) return false;
+    const saved = await store.read(signal);
+    signal.throwIfAborted();
+    if (!saved || typeof saved.accessToken !== 'string' || !safeToken.test(saved.accessToken) ||
+        typeof saved.refreshToken !== 'string' || !safeToken.test(saved.refreshToken) ||
+        !Number.isSafeInteger(saved.expiresAt) || !Number.isSafeInteger(saved.refreshExpiresAt) ||
+        typeof saved.account?.login !== 'string' || !saved.account.login) return false;
+    if (saved.refreshExpiresAt <= now() && saved.expiresAt <= now()) {
+      await store.clear().catch(() => {});
+      return false;
+    }
+    credentials = saved;
+    remember = remembered = true;
+    await getCredentials();
+    return true;
+  }
+
+  function getState () {
+    if (deviceFlow) return {status: 'connecting'};
+    if (!credentials) return {status: 'disconnected'};
+    if (credentials.expiresAt <= now() && credentials.refreshExpiresAt <= now()) return {status: 'reauth-required'};
+    return {status: 'connected', account: {...credentials.account}, expiresAt: credentials.expiresAt, remembered};
+  }
+
   function disconnect () {
     lifetime.abort();
     lifetime = new AbortController();
     deviceFlow = credentials = pending = null;
+    remember = remembered = false;
   }
 
   return {
-    begin, finish, disconnect, getCredentials,
+    begin, finish, restore, getState, disconnect, getCredentials,
     repository: (owner, repo, accessToken, signal) =>
       github('/repos/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo), accessToken, signal)
   };

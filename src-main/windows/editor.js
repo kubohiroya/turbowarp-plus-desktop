@@ -4,7 +4,7 @@ const path = require('path');
 const nodeURL = require('url');
 const zlib = require('zlib');
 const nodeCrypto = require('crypto');
-const {app, dialog} = require('electron');
+const {app, dialog, safeStorage} = require('electron');
 const ProjectRunningWindow = require('./project-running-window');
 const AddonsWindow = require('./addons');
 const DesktopSettingsWindow = require('./desktop-settings');
@@ -25,11 +25,16 @@ const SecurityPromptWindow = require('./security-prompt');
 const projectProcess = require('../project-process');
 const {isSB3} = require('../project-lock');
 const {ExternalYamlFiles} = require('../external-yaml-files');
+const {createCredentialStore} = require('../local-git/credential-store');
+const {installEditorGit} = require('../local-git/editor-ipc');
 const {installEditorPopouts, isReservedPopout} = require('./editor-popouts');
 const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml, workspaceLayout} =
   require('../../config/feature-flags');
 
 const rendererDirectory = plusRenderer ? 'plus-gui' : 'gui';
+const gitClientId = process.env.TW_PLUS_DESKTOP_GIT_CLIENT_ID;
+const gitStore = plusRenderer && !projectProcess.worker && /^[A-Za-z0-9_]+$/u.test(gitClientId || '')
+  ? createCredentialStore({directory: app.getPath('userData'), clientId: gitClientId, safeStorage}) : null;
 if (plusRenderer) {
   const rendererRoot = path.join(__dirname, '../../dist-renderer-webpack/editor', rendererDirectory);
   const buildInfoPath = path.join(rendererRoot, 'build-info.json');
@@ -729,6 +734,11 @@ class EditorWindow extends ProjectRunningWindow {
     });
 
     const editorURL = new URL(`tw-editor://./${rendererDirectory}/gui.html`);
+    if (gitStore) {
+      installEditorGit(this.ipc, this.window.webContents, {clientId: gitClientId, store: gitStore});
+    } else {
+      this.ipc.on('local-git-enabled', event => { event.returnValue = false; });
+    }
     this.ipc.on('editor-popouts-enabled', event => { event.returnValue = editorPopouts.size > 0; });
     if (editorPopouts.size) {
       this.handleEditorPopout = installEditorPopouts(this, editorURL, editorPopouts);

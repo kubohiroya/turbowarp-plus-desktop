@@ -65,7 +65,7 @@ test('device login exposes display fields and serializes token rotation', async 
   const auth = createGitHubAuth('Iv1_test', upstream);
   upstream.oauthResponses.push({error: 'authorization_pending'}, {error: 'slow_down'}, tokens('one', 10), tokens('two'));
   assert.deepEqual(await auth.begin(), {userCode: 'ABCD-EFGH', verificationUri: 'https://github.com/login/device', expiresAt: 160_000});
-  assert.deepEqual(await auth.finish(), {account: {login: 'fixture-user'}, expiresAt: 118_000});
+  assert.deepEqual(await auth.finish(), {account: {login: 'fixture-user'}, expiresAt: 118_000, remembered: false});
   assert.deepEqual(upstream.waitTimes, [1000, 1000, 6000]);
   upstream.advance(10_000);
   const refreshed = await Promise.all([auth.getCredentials(), auth.getCredentials()]);
@@ -225,4 +225,106 @@ test('only one discovery redirect may target the same repository ID and RPC is n
   await error(call(service, session), 403, 'FORBIDDEN');
   assert.equal(gitCalls().length, beforeChange);
   assert.throws(() => parseRemote('https://github.com:443/owner/project.git'), {code: 'BAD_REQUEST'});
+});
+
+test('protected credential records restore and rotate without persisting proxy sessions', async t => {
+  const fs = require('node:fs/promises');
+  const {tmpdir} = require('node:os');
+  const path = require('node:path');
+  const {createCipheriv, createDecipheriv, randomBytes} = require('node:crypto');
+  const {createCredentialStore} = require('../src-main/local-git/credential-store');
+  const directory = await fs.mkdtemp(path.join(tmpdir(), 'tw-credential-store-'));
+  t.after(() => fs.rm(directory, {recursive: true, force: true}));
+  const key = randomBytes(32);
+  const safeStorage = {
+    isAsyncEncryptionAvailable: async () => true,
+    encryptStringAsync: async value => {
+      const iv = randomBytes(12);
+      const cipher = createCipheriv('aes-256-gcm', key, iv);
+      const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+      return Buffer.concat([iv, cipher.getAuthTag(), encrypted]);
+    },
+    decryptStringAsync: async bytes => {
+      const decipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(0, 12));
+      decipher.setAuthTag(bytes.subarray(12, 28));
+      return {result: Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString('utf8')};
+    }
+  };
+  const upstream = fixture();
+  upstream.oauthResponses.push(tokens('one', 10), tokens('two'));
+  const make = () => createCredentialStore({directory, clientId: 'Iv1_test', safeStorage, platform: 'darwin'});
+  const first = await startDesktopGit({clientId: 'Iv1_test', ...upstream, store: make()});
+  t.after(() => first.close());
+  await first.begin(true);
+  assert.equal((await first.finish()).remembered, true);
+  const session = await first.createSession(desktopRemote);
+  const dir = path.join(directory, 'local-git');
+  const [file] = await fs.readdir(dir);
+  const disk = await fs.readFile(path.join(dir, file));
+  for (const secret of ['ghu_one', 'ghr_one', session.bearer]) assert.equal(disk.includes(secret), false);
+  if (process.platform !== 'win32') assert.equal((await fs.stat(path.join(dir, file))).mode & 0o777, 0o600);
+  await first.close();
+
+  upstream.advance(10_000);
+  const second = await startDesktopGit({clientId: 'Iv1_test', ...upstream, store: make()});
+  t.after(() => second.close());
+  assert.equal(await second.restore(), true);
+  assert.equal(second.getState().account.login, 'fixture-user');
+  assert.equal(second.getState().remembered, true);
+  assert.notDeepEqual(await fs.readFile(path.join(dir, file)), disk);
+  const record = await make().read(new AbortController().signal);
+  assert.equal(record.accessToken, 'ghu_two');
+  assert.equal(record.refreshToken, 'ghr_two');
+  assert.deepEqual(Object.keys(record).sort(), ['accessToken', 'account', 'expiresAt', 'refreshExpiresAt', 'refreshToken']);
+  assert.equal(second.getSession(), null);
+  const renewed = await second.createSession(desktopRemote);
+  assert.notEqual(renewed.bearer, session.bearer);
+  await second.disconnect();
+  assert.deepEqual(await fs.readdir(dir), []);
+  assert.equal(await second.restore(), false);
+});
+
+test('credential persistence refuses Linux plaintext storage', async t => {
+  const fs = require('node:fs/promises');
+  const path = require('node:path');
+  const {tmpdir} = require('node:os');
+  const {createCredentialStore} = require('../src-main/local-git/credential-store');
+  const directory = await fs.mkdtemp(path.join(tmpdir(), 'tw-credential-store-'));
+  t.after(() => fs.rm(directory, {recursive: true, force: true}));
+  const store = createCredentialStore({directory, clientId: 'Iv1_test', platform: 'linux', safeStorage: {
+    isEncryptionAvailable: () => true,
+    getSelectedStorageBackend: () => 'basic_text',
+    encryptString: () => assert.fail('Plaintext provider must not encrypt credentials')
+  }});
+  const signal = new AbortController().signal;
+  assert.equal(await store.write({accessToken: 'fixture'}, signal), false);
+  assert.equal(await store.read(signal), null);
+  assert.deepEqual(await fs.readdir(directory), []);
+});
+
+test('Git preload handlers accept only the Plus Editor top frame', async () => {
+  const {EventEmitter} = require('node:events');
+  const {installEditorGit} = require('../src-main/local-git/editor-ipc');
+  const ipc = new EventEmitter();
+  const handlers = new Map();
+  ipc.handle = (name, handler) => handlers.set(name, handler);
+  const contents = new EventEmitter();
+  contents.mainFrame = {url: 'tw-editor://./plus-gui/gui.html?lang=ja'};
+  installEditorGit(ipc, contents, {clientId: 'Iv1_test', store: {}});
+  const accepted = {sender: contents, senderFrame: contents.mainFrame};
+  const assertEnabled = (event, expected) => {
+    ipc.emit('local-git-enabled', event);
+    assert.equal(event.returnValue, expected);
+  };
+  assertEnabled(accepted, true);
+  assert.deepEqual(await handlers.get('local-git-state')(accepted), {status: 'disconnected'});
+  const iframe = {sender: contents, senderFrame: {...contents.mainFrame}};
+  const other = {sender: new EventEmitter(), senderFrame: contents.mainFrame};
+  for (const event of [iframe, other]) {
+    assertEnabled(event, false);
+    await assert.rejects(handlers.get('local-git-state')(event), {message: 'GIT_UNAVAILABLE'});
+  }
+  contents.mainFrame.url = 'tw-editor://./plus-gui/addons.html';
+  assertEnabled(accepted, false);
+  await assert.rejects(handlers.get('local-git-state')(accepted), {message: 'GIT_UNAVAILABLE'});
 });

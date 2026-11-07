@@ -5,8 +5,8 @@ const {parseRemote, startGitProxy} = require('./git-proxy');
 const SESSION_MS = 5 * 60_000;
 const sameRemote = (a, b) => a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase();
 
-async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait} = {}) {
-  const github = createGitHubAuth(clientId, {request, now, wait});
+async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait, store} = {}) {
+  const github = createGitHubAuth(clientId, {request, now, wait, store});
   let lifetime = new AbortController();
   let revision = 0;
   let session = null;
@@ -64,12 +64,15 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
 
   return {
     connection,
-    async begin () {
+    async begin (remember = false) {
       if (closed) throw new GitServiceError(401, 'SESSION_REQUIRED');
+      if (typeof remember !== 'boolean') throw new GitServiceError(400, 'BAD_REQUEST');
       reset();
-      return github.begin();
+      return github.begin(remember);
     },
     finish: github.finish,
+    restore: github.restore,
+    getState: github.getState,
     async createSession (remoteUrl, write = false) {
       if (closed) throw new GitServiceError(401, 'SESSION_REQUIRED');
       if (typeof write !== 'boolean') throw new GitServiceError(400, 'BAD_REQUEST');
@@ -90,7 +93,10 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
     getSession () {
       return session?.public.expiresAt > now() ? session.public : null;
     },
-    disconnect: reset,
+    async disconnect () {
+      reset();
+      await store?.clear();
+    },
     async close () {
       if (closed) return;
       closed = true;
