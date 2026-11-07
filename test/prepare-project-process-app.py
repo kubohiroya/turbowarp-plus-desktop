@@ -32,6 +32,7 @@ paths = (
     "src-main/standard-renderer-save.js", "src-main/workspace-layout-store.js", "src-main/windows/editor-popouts.js",
     "src-preload/editor.js",
 )
+paths += tuple(file.relative_to(root).as_posix() for file in sorted((root / "src-main/local-git").glob("*.js")))
 def overlay(name, contents):
     parents, leaf = name.split("/")[:-1], name.split("/")[-1]
     folder = header["files"]
