@@ -22,6 +22,16 @@ const opens = (page, kind, url = 'about:blank') => page.evaluate(
   {name: `tw-plus-${kind}-${randomUUID()}`, url}
 );
 
+const verifyBackpackAbsent = async page => {
+  await page.locator('.blocklySvg').first().waitFor({state: 'visible'});
+  const buttons = page.getByRole('button', {name: /backpack|バックパック/i, includeHidden: true});
+  const header = page.locator('[class*="backpack_backpack-header"]');
+  const {width, height} = await page.evaluate(() => ({width: innerWidth, height: innerHeight}));
+  await page.mouse.move(width / 2, height - 2);
+  assert.equal(await buttons.count(), 0, 'Backpack controls must be absent at the bottom edge');
+  assert.equal(await header.count(), 0, 'The Backpack header must be absent');
+};
+
 test('editor popouts require a reservation and isolate each child', {
   skip: process.platform !== 'darwin' || !editor || !fixture,
   timeout: 90000
@@ -86,6 +96,7 @@ test('editor popouts require a reservation and isolate each child', {
   };
 
   await launch(false, async (app, page) => {
+    await verifyBackpackAbsent(page);
     const pin = page.getByRole('button', {name: /^(Pin sprite list|スプライト一覧を固定表示)$/});
     await pin.waitFor({state: 'visible'});
     assert.equal(await pin.getAttribute('aria-pressed'), 'true');
@@ -97,6 +108,7 @@ test('editor popouts require a reservation and isolate each child', {
   });
 
   await launch(true, async (app, page) => {
+    await verifyBackpackAbsent(page);
     for (const kind of kinds) assert.equal(await opens(page, kind), false);
     assert.equal(await page.evaluate(() => EditorPreload.reservePopout('backpack', 'invalid')), false);
     const ticket = randomUUID();
@@ -215,14 +227,6 @@ test('editor popouts require a reservation and isolate each child', {
 
     await press(/Layout options|配置メニュー/);
     await click(page.getByRole('menuitemcheckbox', {name: /Show undock buttons|アンドックボタンを表示/}));
-
-    const backpack = await open('backpack', async () => {
-      await press(/Reveal Backpack|バックパックを展開/);
-      await press(/Undock Backpack|バックパックを別画面で開く/);
-      await internalToExternal(/^(Backpack|バックパック)$/)();
-    });
-    await verifyChild('backpack', backpack);
-    await backpack.close();
 
     const stage = await open('stage', async () => {
       const displayLabel = /^(Stage display|ステージの表示)$/;
