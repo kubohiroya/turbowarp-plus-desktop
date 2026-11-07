@@ -26,9 +26,22 @@ test('editor popouts require a reservation and isolate each child', {
   skip: process.platform !== 'darwin' || !editor || !fixture,
   timeout: 90000
 }, async t => {
-  const buildInfo = require('../dist-renderer-webpack/editor/plus-gui/build-info.json');
-  const editorRevision = execFileSync('git', ['-C', editor, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
-  assert.equal(buildInfo.editorRevision, editorRevision);
+  const editorRevision = process.env.E2E_EXPECT_SITE_REVISION;
+  assert.match(editorRevision || '', /^[a-f0-9]{40}$/, 'Set E2E_EXPECT_SITE_REVISION to a full Editor SHA');
+  const renderer = path.join(repo, 'dist-renderer-webpack/editor/plus-gui/build-info.json');
+  let buildInfo;
+  try {
+    buildInfo = JSON.parse(await fs.readFile(renderer, 'utf8'));
+  } catch (error) {
+    throw new Error(`Cannot verify Editor revision at ${renderer}: expected ${editorRevision}, actual unavailable`, {cause: error});
+  }
+  const evidence = `Editor revision at ${renderer}: expected ${editorRevision}, actual ${buildInfo?.editorRevision ?? 'missing'}`;
+  assert.equal(buildInfo?.editorRevision, editorRevision, evidence);
+  assert.equal(require('../config/plus-renderer.json').editorRevision, editorRevision,
+    'Desktop renderer pin differs from the expected Editor revision');
+  const checkoutRevision = execFileSync('git', ['-C', editor, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+  assert.equal(checkoutRevision, editorRevision, 'Editor checkout differs from the expected Editor revision');
+  t.diagnostic(evidence);
   const {_electron} = createRequire(path.join(editor, 'package.json'))('playwright');
   const executablePath = process.env.TW_PLUS_TEST_ELECTRON || require('electron');
   const launch = async (popout, verify) => {
