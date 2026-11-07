@@ -143,7 +143,8 @@ function installEditorPopouts (editor, editorURL, enabled) {
     new EditorPopoutWindow(window, parent, url.href);
   });
   contents.on('did-start-navigation', event => {
-    if (event.isMainFrame) close();
+    // The editor uses the History API for modal state without changing its URL.
+    if (event.isMainFrame && (!event.isSameDocument || event.url !== editorURL.href)) close();
   });
   parent.once('closed', close);
 

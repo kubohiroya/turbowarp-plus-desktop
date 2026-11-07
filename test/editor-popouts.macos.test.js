@@ -282,6 +282,11 @@ test('editor popouts require a reservation and isolate each child', {
       assert.deepEqual(await page.evaluate(tickets => tickets.map(ticket => EditorPreload.reservePopout('code', ticket)),
         [randomUUID(), randomUUID()]), [true, false]);
     }
+    await Promise.all([
+      page.waitForEvent('framenavigated', frame => frame === page.mainFrame()),
+      page.evaluate(() => history.pushState('modal-state', '', location.href))
+    ]);
+    assert.equal(await child.evaluate(() => Boolean(document.querySelector('#mount')?.children.length)), true);
     await Promise.all([child.waitForEvent('close'), page.reload()]);
     assert.equal(app.windows().length, 1);
   });
