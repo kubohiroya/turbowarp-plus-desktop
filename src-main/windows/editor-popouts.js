@@ -89,7 +89,8 @@ function installEditorPopouts (editor, editorURL, enabled) {
   editorURL.searchParams.set('twPlusStandardLayout', '1');
   if (enabled.has('backpack')) editorURL.searchParams.set('twPlusBackpackPopout', '1');
   if (enabled.has('stage')) editorURL.searchParams.set('twPlusStagePopout', '1');
-  if (enabled.has('sprite-list') || enabled.has('sprite-properties')) {
+  if (enabled.has('sprite-list')) editorURL.searchParams.set('twPlusSpriteListPopout', '1');
+  if (enabled.has('sprite-properties')) {
     editorURL.searchParams.set('twPlusTargetPanelsPopout', '1');
     editorURL.searchParams.set('twPlusSpriteProperties', '1');
     // The properties panel uses the editor's layout menu to reveal its undock control.

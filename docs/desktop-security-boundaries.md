@@ -18,13 +18,14 @@
 
 ## editor の別窓
 
-開発起動時に `TW_PLUS_DESKTOP_RENDERER=1` と、使う画面のフラグを設定する。別窓の既定値はすべて OFF。切り戻すには対象フラグを外してアプリを再起動する。
+開発起動時は `TW_PLUS_DESKTOP_RENDERER=1` で Plus renderer を有効にする。スプライト一覧の別窓は既定で有効。他の画面は表のフラグで有効になる。切り戻し時はスプライト一覧なら `TW_PLUS_DESKTOP_TARGET_PANELS_POPOUT=0` を指定し、他の画面なら対象フラグを外してアプリを再起動する。
 
 | 画面 | 起動フラグ |
 | --- | --- |
 | バックパック | `TW_PLUS_DESKTOP_BACKPACK_POPOUT=1` |
 | ステージ | `TW_PLUS_DESKTOP_STAGE_POPOUT=1` |
-| スプライト一覧・プロパティ | `TW_PLUS_DESKTOP_TARGET_PANELS_POPOUT=1` |
+| スプライト一覧 | 既定で有効 |
+| スプライトプロパティ | `TW_PLUS_DESKTOP_TARGET_PANELS_POPOUT=1` |
 | コード | `TW_PLUS_DESKTOP_CODE_POPOUT=1` |
 
 - editor の main frame、固定 URL、`tw-editor://.` の origin を照合した IPC で、画面の種別と UUID の組を一度予約する。予約は5秒で失効する。1 editor あたりコードは2枚まで、他の別窓は種別ごとに1枚まで開ける。

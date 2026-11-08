@@ -8,12 +8,12 @@ exports.plusRenderer = rendererOverride === undefined
     existsSync(path.join(__dirname, '../dist-renderer-webpack/editor/plus-gui/gui.html'))
   : rendererOverride === '1';
 exports.documentCsp = process.env.TW_PLUS_DESKTOP_DOCUMENT_CSP === '1';
-const targetPopouts = process.env.TW_PLUS_DESKTOP_TARGET_PANELS_POPOUT === '1';
+const targetPopouts = process.env.TW_PLUS_DESKTOP_TARGET_PANELS_POPOUT;
 exports.editorPopouts = new Set(exports.plusRenderer ? [
   ['backpack', process.env.TW_PLUS_DESKTOP_BACKPACK_POPOUT === '1'],
   ['stage', process.env.TW_PLUS_DESKTOP_STAGE_POPOUT === '1'],
-  ['sprite-list', targetPopouts],
-  ['sprite-properties', targetPopouts],
+  ['sprite-list', targetPopouts !== '0'],
+  ['sprite-properties', targetPopouts === '1'],
   ['code', process.env.TW_PLUS_DESKTOP_CODE_POPOUT === '1']
 ].filter(([, enabled]) => enabled).map(([kind]) => kind) : []);
 exports.projectIsolation = process.env.TW_PLUS_DESKTOP_PROJECT_ISOLATION === '1';

@@ -95,19 +95,36 @@ test('editor popouts require a reservation and isolate each child', {
     }
   };
 
-  await launch(false, async (app, page) => {
+  await t.test('the default sprite list opens in one click and returns on native close', () => launch(false, async (app, page) => {
     await verifyBackpackAbsent(page);
     const pin = page.getByRole('button', {name: /^(Pin sprite list|スプライト一覧を固定表示)$/});
     await pin.waitFor({state: 'visible'});
     assert.equal(await pin.getAttribute('aria-pressed'), 'true');
-    await page.locator('[data-backdrop-placement] img').first().waitFor({state: 'visible'});
+    const backdrop = page.locator('[data-backdrop-placement] img').first();
+    await backdrop.waitFor({state: 'visible'});
     await page.getByRole('button', {name: /^(Reveal sprite list|スプライト一覧を展開)$/}).waitFor({state: 'hidden'});
-    assert.equal(await page.evaluate(() => typeof EditorPreload.reservePopout), 'undefined');
     for (const kind of kinds) assert.equal(await opens(page, kind), false);
+    assert.equal(await page.evaluate(ticket => EditorPreload.reservePopout('sprite-properties', ticket), randomUUID()), false);
     assert.equal(app.windows().length, 1);
-  });
 
-  await launch(true, async (app, page) => {
+    const undock = page.getByRole('button', {name: /^(Undock sprite list|アンドック)$/, exact: true});
+    const [list] = await Promise.all([
+      app.waitForEvent('window', {timeout: 15000}),
+      headed ? undock.click() : undock.dispatchEvent('click')
+    ]);
+    await list.waitForURL(/\/plus-gui\/sprite-list-popout\.html#[0-9a-f-]+$/);
+    await list.locator('[data-backdrop-placement] img').first().waitFor({state: 'visible'});
+    assert.equal(await backdrop.count(), 0);
+    assert.equal(app.windows().length, 2);
+    const child = await app.browserWindow(list);
+    assert.equal(await child.evaluate(win => win.isVisible()), headed);
+    await Promise.all([list.waitForEvent('close'), child.evaluate(win => win.close())]);
+    await backdrop.waitFor({state: 'visible'});
+    await undock.waitFor({state: 'visible'});
+    assert.equal(app.windows().length, 1);
+  }));
+
+  await t.test('opt-in popouts enforce reservations and child isolation', () => launch(true, async (app, page) => {
     await verifyBackpackAbsent(page);
     for (const kind of kinds) assert.equal(await opens(page, kind), false);
     assert.equal(await page.evaluate(() => EditorPreload.reservePopout('backpack', 'invalid')), false);
@@ -237,10 +254,7 @@ test('editor popouts require a reservation and isolate each child', {
     await verifyChild('stage', stage);
     await stage.close();
 
-    const list = await open('sprite-list', async () => {
-      await press(/^(Undock sprite list|アンドック)$/);
-      await internalToExternal(/^(Sprite list|スプライト一覧)$/)();
-    });
+    const list = await open('sprite-list', () => press(/^(Undock sprite list|アンドック)$/));
     await verifyChild('sprite-list', list);
     await list.close();
 
@@ -293,5 +307,5 @@ test('editor popouts require a reservation and isolate each child', {
     assert.equal(await child.evaluate(() => Boolean(document.querySelector('#mount')?.children.length)), true);
     await Promise.all([child.waitForEvent('close'), page.reload()]);
     assert.equal(app.windows().length, 1);
-  });
+  }));
 });
