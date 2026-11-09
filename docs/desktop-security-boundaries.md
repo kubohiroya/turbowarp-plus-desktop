@@ -32,6 +32,8 @@
 - Electron の `setWindowOpenHandler` は `about:blank`、予約した名前、POST 本文のない要求の組を確認する。main が種別に対応する同梱ページと予約 UUID を設定し、接続後は共通 renderer が子の `opener` を外す。
 - 子では別窓、外部遷移、renderer による権限要求を拒否する。子の preload は窓の状態取得・最大化・最小化・復元と状態通知を提供する。操作時は送信元フレームと固定 URL を照合する。親の再読み込みや終了で予約と子を破棄する。
 
+保存では、GUI が作品を書き出す前に Desktop のファイルハンドル（`createWritable`）が Editor の `flushPendingSurfaceEdits` を待ち、別窓に残る未反映の編集を回収する。回収に失敗した場合は書き込まず、GUI の保存エラーとして表示する。標準 renderer では何もしない。
+
 拡張のカタログ掲載・Loader の実行承認・OS のメディアやクリップボードの許可はそれぞれ別の判断。承認済みの非サンドボックス拡張は editor の Web コンテキストで動作するため、editor が公開する用途別 API も main のハンドルと引数で権限を限定する。
 
 ## macOS の回帰テスト
@@ -49,6 +51,6 @@ E2E_EXPECT_SITE_REVISION="$expected" TW_PLUS_TEST_EDITOR_CHECKOUT=/absolute/path
 
 起動前に、指定した Editor SHA を Desktop の固定設定、使用する checkout、実際に配信する renderer の `build-info.json` と照合する。過去版を再現する場合は、その完全な SHA を明示して結果を区別する。
 
-実 Electron の BrowserWindow を非表示で起動し、OS のフォーカスを切り替えずに確認する。配信された renderer のリビジョン、既定 OFF、予約なしの別窓、サブフレーム、無効・別種別・使用済みのチケット、各画面の UI からの起動、子の隔離とナビゲーション拒否、コード別窓の予約上限、親の再読み込みによる終了を検証する。
+実 Electron の BrowserWindow を非表示で起動し、OS のフォーカスを切り替えずに確認する。配信された renderer のリビジョン、既定 OFF、予約なしの別窓、サブフレーム、無効・別種別・使用済みのチケット、各画面の UI からの起動、子の隔離とナビゲーション拒否、コード別窓の予約上限、親の再読み込みによる終了を検証する。また、スプライト設定の別窓で確定前の値を残したまま親から保存し、保存した SB3 にその値が入ることを検証する。
 
 画面付きで確認する場合は、上記のコマンドに `TW_PLUS_TEST_SHOW_WINDOWS=1` を追加すると、通常の Desktop エントリーポイントから実ウィンドウを表示する。親子のフォーカス切り替え、Electron の最大化・最小化とそれぞれの復元イベント、コード別窓の「もう一枚開く」と2枚の上限を検証する。
