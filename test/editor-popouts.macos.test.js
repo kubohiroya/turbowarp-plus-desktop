@@ -54,7 +54,7 @@ test('editor popouts require a reservation and isolate each child', {
   t.diagnostic(evidence);
   const {_electron} = createRequire(path.join(editor, 'package.json'))('playwright');
   const executablePath = process.env.TW_PLUS_TEST_ELECTRON || require('electron');
-  const launch = async (popout, verify) => {
+  const launch = async (popout, verify, project = fixture) => {
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-editor-popouts-'));
     try {
       const env = {
@@ -72,7 +72,7 @@ test('editor popouts require a reservation and isolate each child', {
       const app = await _electron.launch({
         executablePath,
         cwd: repo,
-        args: [entrypoint, fixture],
+        args: [entrypoint, project],
         env
       });
       try {
@@ -150,12 +150,6 @@ test('editor popouts require a reservation and isolate each child', {
     const button = (name, within = page) => within.getByRole('button', {name});
     const click = locator => locator.dispatchEvent('click');
     const press = (name, within = page) => click(button(name, within));
-    const reveal = async name => {
-      const trigger = button(name);
-      await click(trigger);
-      // The drawer focuses its panel on the next frame. Wait before opening its menu.
-      await trigger.locator('xpath=following-sibling::*[1]').and(page.locator(':focus')).waitFor({state: 'attached'});
-    };
     const internalToExternal = title => async () => {
       const panel = page.getByRole('region', {name: title});
       await press(layoutLabel, panel);
@@ -246,10 +240,9 @@ test('editor popouts require a reservation and isolate each child', {
     await click(page.getByRole('menuitemcheckbox', {name: /Show undock buttons|アンドックボタンを表示/}));
 
     const stage = await open('stage', async () => {
-      const displayLabel = /^(Stage display|ステージの表示)$/;
-      await reveal(/Reveal stage|ステージを展開/);
-      await press(displayLabel);
-      await click(page.getByRole('menu', {name: displayLabel}).getByRole('menuitem', {name: separateLabel}));
+      // The menu bar launcher replaces the stage drawer's edge handle (Layout 0.1.36 and later).
+      await press(/^(Stage opening options|ステージの開き方)$/);
+      await click(page.getByRole('menuitem', {name: /^(Open in a separate window|別ウィンドウで開く)$/}));
     });
     await verifyChild('stage', stage);
     await stage.close();
@@ -308,4 +301,52 @@ test('editor popouts require a reservation and isolate each child', {
     await Promise.all([child.waitForEvent('close'), page.reload()]);
     assert.equal(app.windows().length, 1);
   }));
+
+  await t.test('saving collects an unfinished edit from the sprite properties window', async () => {
+    // Save over a copy, so the shared fixture stays unchanged for the other cases.
+    const work = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-editor-popouts-save-'));
+    const project = path.join(work, 'fixture.sb3');
+    await fs.copyFile(fixture, project);
+    const savedX = async () => {
+      const zip = new (require('adm-zip'))(await fs.readFile(project));
+      const json = JSON.parse(zip.readAsText('project.json'));
+      return json.targets.find(target => target.name === 'Sprite1').x;
+    };
+    const initial = await savedX();
+    const edited = initial === 123 ? 124 : 123;
+    try {
+      await launch(true, async (app, page) => {
+        const click = locator => locator.dispatchEvent('click');
+        const press = (name, within = page) => click(within.getByRole('button', {name}));
+        await press(/Layout options|配置メニュー/);
+        await click(page.getByRole('menuitemcheckbox', {name: /Show undock buttons|アンドックボタンを表示/}));
+        const toggle = page.getByRole('button', {name: /^(Sprite|スプライト)$/});
+        const [properties] = await Promise.all([app.waitForEvent('window', {timeout: 15000}), (async () => {
+          await click(toggle);
+          await press(openLabel, toggle.locator('..'));
+          const panel = page.getByRole('region', {name: /^(Sprite|スプライト)$/});
+          await press(layoutLabel, panel);
+          await press(separateLabel, panel);
+        })()]);
+        await properties.waitForURL(/\/plus-gui\/sprite-properties-popout\.html#[0-9a-f-]+$/);
+        const x = properties.getByRole('spinbutton', {name: 'x', exact: true});
+        // The field commits on Enter or blur. Typing alone leaves the edit in the other window.
+        await x.fill(String(edited));
+        const vmX = () => page.evaluate(() => window.ReduxStore.getState().scratchGui.vm.runtime.targets
+          .find(target => target.getName() === 'Sprite1').x);
+        assert.equal(await vmX(), initial);
+
+        await page.keyboard.press(process.platform === 'darwin' ? 'Meta+s' : 'Control+s');
+        const deadline = Date.now() + 10000;
+        while (await savedX() !== edited) {
+          assert.ok(Date.now() < deadline, 'The saved project must contain the edit from the other window');
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        assert.equal(await vmX(), edited);
+        assert.equal(await x.inputValue(), String(edited));
+      }, project);
+    } finally {
+      await fs.rm(work, {recursive: true, force: true});
+    }
+  });
 });

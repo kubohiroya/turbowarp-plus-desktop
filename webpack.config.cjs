@@ -94,6 +94,7 @@ module.exports = [
             alias: {
                 'scratch-gui$': path.resolve(__dirname, 'node_modules/scratch-gui/src/index.js'),
                 'scratch-render-fonts$': path.resolve(__dirname, 'node_modules/scratch-gui/src/lib/tw-scratch-render-fonts'),
+                '@tw-plus/pending-surface-edits$': path.resolve(__dirname, 'src-renderer-webpack/editor/gui/pending-surface-edits.js'),
             }
         }
     },

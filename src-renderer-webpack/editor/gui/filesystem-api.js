@@ -7,6 +7,8 @@
  * and it lets us not share full file paths which could contain eg. the user's name.
  */
 
+import {flushPendingSurfaceEdits} from '@tw-plus/pending-surface-edits';
+
 /**
  * @param {unknown} contents
  * @returns {Uint8Array}
@@ -120,6 +122,9 @@ class WrappedFileHandle {
   }
 
   async createWritable () {
+    // The GUI serializes the project only after this resolves, so edits still held by panels in
+    // other windows are collected first. If that fails, nothing is written and the GUI reports it.
+    await flushPendingSurfaceEdits();
     return new WrappedFileWritable(this.id);
   }
 }

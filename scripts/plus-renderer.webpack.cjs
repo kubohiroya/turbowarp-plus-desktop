@@ -14,6 +14,10 @@ config.resolve.alias['@tw-plus/pinned-desktop-panel-host$'] =
   path.join(editor, 'site/editor-layout/desktop-panel-host.ts');
 config.resolve.alias['@tw-plus/browser-window-host$'] =
   path.join(editor, 'site/editor-backpack/browser-host.ts');
+// Saving collects edits from panels in other windows through the Editor's own collector. Resolve the
+// package as the Editor does, so both imports share one registry.
+config.resolve.alias['@tw-plus/pending-surface-edits$'] =
+  createRequire(path.join(editor, 'package.json')).resolve('@kubohiroya/turbowarp-editor-surfaces');
 // Keep the Desktop adapter at the pinned Editor's existing window host boundaries.
 const popoutHost = path.join(gui, 'popout-host.js');
 for (const request of [
