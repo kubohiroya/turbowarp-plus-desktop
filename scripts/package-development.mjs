@@ -5,6 +5,7 @@ import {createReadStream, promises as fs} from 'node:fs';
 import path from 'node:path';
 import asar from '@electron/asar';
 import {Arch, build, Platform} from 'electron-builder';
+import {verifyEditorLayout} from './editor-layout-pin.mjs';
 
 const desktop = path.resolve(import.meta.dirname, '..');
 const [target, arch, sourceFile] = process.argv.slice(2);
@@ -38,6 +39,9 @@ assert.deepEqual(
   [desktopRevision, editorRevision, guiRevision, vmRevision, packages['node_modules/electron'].version],
   'The built renderer differs from the checked-out Desktop or its pinned dependencies'
 );
+// The Editor checkout owns `site/source.json`; its lockfile and install name the adopted Layout release.
+assert.deepEqual(buildInfo.editorLayout, await verifyEditorLayout(path.resolve(path.dirname(sourceFile), '..')),
+  'The built renderer does not record the Layout release the pinned Editor adopts');
 assert.equal(buildInfo.desktopDirty, false, 'Build the renderer from a clean Desktop checkout');
 assert.equal(git('status', '--porcelain', '--untracked-files=no'), '', 'Package from a clean Desktop checkout');
 
@@ -90,6 +94,7 @@ const sources = {
   editor: `https://github.com/kubohiroya/turbowarp-plus-editor/tree/${editorRevision}`,
   gui: `https://github.com/${guiRepository}/tree/${guiRevision}`,
   vm: `https://github.com/${vmRepository}/tree/${vmRevision}`,
+  editorLayout: buildInfo.editorLayout.resolved,
   standardGui: packages['node_modules/scratch-gui'].resolved,
   standardExtensions: packages['node_modules/@turbowarp/extensions'].resolved
 };
