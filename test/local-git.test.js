@@ -52,7 +52,7 @@ function fixture (onGit = () => new Response('git-bytes', {headers: {'Content-Ty
       }
       if (pathname === '/user') return Response.json({login: 'fixture-user'});
       if (pathname.startsWith('/repos/')) {
-        assert.match(options.headers.Authorization, /^Bearer (?:ghu_|github_pat_)/u);
+        assert.match(options.headers.Authorization, /^Bearer (?:gh[ou]_|github_pat_)/u);
         const repository = repositories.get(pathname);
         return repository ? Response.json(repository) : new Response(null, {status: 404});
       }
@@ -383,6 +383,8 @@ test('Git preload handlers accept only the Plus Editor top frame', async () => {
     await assert.rejects(handlers.get('local-git-state')(event), {message: 'GIT_UNAVAILABLE'});
     await assert.rejects(handlers.get('local-git-connect-personal-access-token')(event, desktopRemote),
       {message: 'GIT_UNAVAILABLE'});
+    await assert.rejects(handlers.get('local-git-connect-git-credential')(event, desktopRemote, 'fixture-user'),
+      {message: 'GIT_UNAVAILABLE'});
   }
   contents.mainFrame.url = 'tw-editor://./plus-gui/addons.html';
   assertEnabled(accepted, false);
@@ -397,13 +399,21 @@ test('token-only auth stays hidden from older Editors and cancellation releases 
   ipc.handle = (name, handler) => handlers.set(name, handler);
   const contents = new EventEmitter();
   contents.mainFrame = {url: 'tw-editor://./plus-gui/gui.html'};
-  installEditorGit(ipc, contents, {promptPersonalToken: async () => null});
+  installEditorGit(ipc, contents, {
+    promptPersonalToken: async () => null,
+    gitCredentialHelper: {available: async ({owner}) => owner === 'owner'},
+    confirmGitCredential: async () => false
+  });
   const event = {sender: contents, senderFrame: contents.mainFrame};
   ipc.emit('local-git-enabled', event);
   assert.equal(event.returnValue, false);
   ipc.emit('local-git-auth-enabled', event);
   assert.equal(event.returnValue, true);
   assert.deepEqual(await handlers.get('local-git-auth-methods')(event), ['fine-grained-pat']);
+  assert.deepEqual(await handlers.get('local-git-auth-methods')(event, desktopRemote),
+    ['fine-grained-pat', 'git-credential-helper']);
+  assert.deepEqual(await handlers.get('local-git-auth-methods')(event, 'https://github.com/another/project'),
+    ['fine-grained-pat']);
   t.after(() => handlers.get('local-git-disconnect')(event));
   await assert.rejects(handlers.get('local-git-begin')(event), {message: 'GIT_UNAVAILABLE'});
   assert.equal(await handlers.get('local-git-connect-personal-access-token')(event, desktopRemote), null);
@@ -572,4 +582,104 @@ test('native token prompt captures private input and filters helper failures', a
     execute: async () => { throw Object.assign(new Error('helper error'), {code: 1, stderr: 'User canceled. (-128)\n'}); }
   });
   assert.equal(await cancelled(remote, signal), null);
+});
+
+test('Git credential helper checks configuration and reads only GitHub HTTPS credentials', async () => {
+  const {createGitCredentialHelper} = require('../src-main/local-git/git-credential-helper');
+  const signal = new AbortController().signal;
+  const remote = {owner: 'owner', repo: 'project'};
+  const calls = [];
+  let config = 'manager\n';
+  let credential = 'protocol=https\nhost=github.com\nusername=fixture-user\npassword=gho_fixture\n';
+  const helper = createGitCredentialHelper({
+    run: async (args, input, receivedSignal) => {
+      assert.equal(receivedSignal, signal);
+      calls.push({args, input});
+      return args[0] === 'config' ? config : credential;
+    }
+  });
+  assert.equal(await helper.available(remote, signal), true);
+  assert.deepEqual(calls[0], {
+    args: ['config', '--get-urlmatch', 'credential.helper', 'https://github.com/owner/project.git'],
+    input: undefined
+  });
+  assert.equal(await helper.read(remote, 'fixture-user', signal), 'gho_fixture');
+  assert.deepEqual(calls[1], {
+    args: ['-c', 'core.askPass=', '-c', 'credential.interactive=false', 'credential', 'fill'],
+    input: 'protocol=https\nhost=github.com\npath=owner/project.git\nusername=fixture-user\n\n'
+  });
+  config = '\n';
+  assert.equal(await helper.available(remote, signal), false);
+  for (const invalid of [
+    credential.replace('github.com', 'other.example'),
+    credential + 'path=owner/other.git\n',
+    credential + 'password=ghp_second\n',
+    credential.replace('gho_fixture', 'plain-password')
+  ]) {
+    credential = invalid;
+    await assert.rejects(helper.read(remote, 'fixture-user', signal), {code: 'REAUTH_REQUIRED'});
+  }
+  assert.equal(calls.some(({args}) => args.includes('reject') || args.includes('approve')), false);
+});
+
+test('Git credential connections require native consent and the confirmed GitHub account', async t => {
+  const upstream = fixture();
+  let available = false;
+  let consent = false;
+  const steps = [];
+  const token = 'gho_fixture';
+  const remote = {owner: 'owner', repo: 'project'};
+  const service = await startDesktopGit({
+    ...upstream,
+    gitCredentialHelper: {
+      available: async selection => {
+        assert.deepEqual(selection, remote);
+        steps.push('probe');
+        return available;
+      },
+      read: async (selection, login) => {
+        assert.deepEqual(selection, remote);
+        assert.match(login, /^(?:wrong-user|FIXTURE-USER)$/u);
+        steps.push('read');
+        return token;
+      }
+    },
+    confirmGitCredential: async (selection, login) => {
+      assert.deepEqual(selection, remote);
+      assert.match(login, /^(?:wrong-user|FIXTURE-USER)$/u);
+      steps.push('confirm');
+      return consent;
+    },
+    store: {
+      write: () => assert.fail('Helper credentials must never reach persistent storage'),
+      clear: async () => {},
+      read: async () => null
+    }
+  });
+  t.after(() => service.close());
+
+  await assert.rejects(service.connectGitCredential(desktopRemote, 'FIXTURE-USER'), {code: 'GIT_UNAVAILABLE'});
+  assert.deepEqual(steps.splice(0), ['probe']);
+  available = true;
+  assert.equal(await service.connectGitCredential(desktopRemote, 'FIXTURE-USER'), null);
+  assert.deepEqual(steps.splice(0), ['probe', 'confirm']);
+  assert.equal(upstream.calls.length, 0);
+  await assert.rejects(service.connectGitCredential(desktopRemote, 'fixture\npassword=injection'), {code: 'BAD_REQUEST'});
+  assert.deepEqual(steps, []);
+
+  consent = true;
+  await assert.rejects(service.connectGitCredential(desktopRemote, 'wrong-user'), {code: 'FORBIDDEN'});
+  assert.deepEqual(steps.splice(0), ['probe', 'confirm', 'read']);
+  assert.equal(service.getState().status, 'disconnected');
+  assert.deepEqual(await service.connectGitCredential(desktopRemote, 'FIXTURE-USER'), {
+    status: 'connected', account: {login: 'fixture-user'}, remembered: false
+  });
+  const session = await service.createSession(desktopRemote);
+  assert.equal(JSON.stringify(session).includes(token), false);
+  assert.equal(await (await call(service, session)).text(), 'git-bytes');
+  await assert.rejects(service.createSession('https://github.com/owner/other'), {code: 'FORBIDDEN'});
+  upstream.repositories.get('/repos/owner/project').id = 2;
+  await error(call(service, session), 403, 'FORBIDDEN');
+  await service.disconnect();
+  assert.equal(await service.restore(), false);
 });

@@ -22,3 +22,4 @@ exports.projectAssetTransfer = exports.projectJSONTransfer && process.env.TW_PLU
 exports.externalYaml = exports.projectIsolation && process.env.TW_PLUS_DESKTOP_EXTERNAL_YAML === '1';
 exports.workspaceLayout = exports.projectIsolation && process.env.TW_PLUS_DESKTOP_WORKSPACE_LAYOUT === '1';
 exports.gitPersonalAccessToken = process.env.TW_PLUS_DESKTOP_GIT_PERSONAL_ACCESS_TOKEN !== '0';
+exports.gitCredentialHelper = process.env.TW_PLUS_DESKTOP_GIT_CREDENTIAL_HELPER !== '0';

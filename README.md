@@ -70,6 +70,12 @@ Desktop は OS のマスク付きダイアログで `github_pat_` から始ま�
 
 方式選択に対応する Editor は、トップフレームの `EditorPreload.localGitAuth.getAuthMethods()` で利用可能な方式を調べ、`fine-grained-pat` がある場合に `connectPersonalAccessToken(remote, remember)` を呼べます。トークンの入力画面は Desktop が表示します。旧 Editor の Device Flow 用 API は `EditorPreload.localGit` です。切り戻すときは必要に応じて先に切断し、`TW_PLUS_DESKTOP_GIT_PERSONAL_ACCESS_TOKEN=0` を指定して起動します。
 
+#### 手元の Git の認証情報
+
+`git` と、選択した GitHub リポジトリに適用される `credential.helper` の設定がある場合は、既存の認証情報を利用できます。接続ごとに GitHub のアカウント名とリポジトリを確認し、同意を受けてから認証情報を読みます。GitHub が返すアカウント名が確認画面と一致し、対象リポジトリにアクセスできるときに接続します。トークンはメモリに保持し、切断で破棄します。資格情報を再取得する場合はもう一度確認画面を表示します。
+
+Editor は `EditorPreload.localGitAuth.getAuthMethods(remote)` にリモートを渡し、`git-credential-helper` が返ったときに `connectGitCredential(remote, login)` を呼べます。切り戻すときは `TW_PLUS_DESKTOP_GIT_CREDENTIAL_HELPER=0` を指定して起動します。
+
 push の `git-receive-pack` POST には `Git-Push-Id`（小文字の UUID v4）が必要です。上流への送信前に有効なセッションで ID を予約し、同じ ID が届いた場合は `409 PUSH_DUPLICATE` を返します。予約はセッションの寿命に合わせて保持されます。 [共通契約](https://github.com/kubohiroya/turbowarp-plus-editor/issues/316)
 
 ## 開発プロファイル

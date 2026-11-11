@@ -5,17 +5,21 @@ const {parseRemote, startGitProxy} = require('./git-proxy');
 const SESSION_MS = 5 * 60_000;
 const MAX_PUSH_IDS = 256;
 const PERSONAL_TOKEN = 'fine-grained-pat';
+const GIT_CREDENTIAL_HELPER = 'git-credential-helper';
+const isGitHubLogin = login => typeof login === 'string' && /^[A-Za-z0-9_-]{1,100}$/u.test(login);
 const isPersonalToken = token => typeof token === 'string' && /^github_pat_[A-Za-z0-9_]{1,1024}$/u.test(token);
 const sameRemote = (a, b) => a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase();
 
-async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait, store, promptPersonalToken} = {}) {
+async function startDesktopGit ({
+  clientId, request = fetch, now = Date.now, wait, store, promptPersonalToken, gitCredentialHelper, confirmGitCredential
+} = {}) {
   const github = createGitHubAuth(clientId, {request, now, wait, store});
   let lifetime = new AbortController();
   let revision = 0;
   let session = null;
   let closed = false;
-  let personalToken = null;
-  let personalReauthRequired = false;
+  let localToken = null;
+  let tokenReauthRequired = false;
   let authOperation = null;
 
   function expired (selected) {
@@ -30,18 +34,19 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
     session?.controller.abort();
     session = null;
     github.disconnect();
-    personalToken = null;
-    personalReauthRequired = false;
+    localToken = null;
+    tokenReauthRequired = false;
     authOperation = null;
   }
 
   async function repository (remote, write, accessToken, signal) {
     const metadata = await github.repository(remote.owner, remote.repo, accessToken, signal).catch(error => {
-      if (!signal.aborted && error.code === 'REAUTH_REQUIRED' && personalToken?.accessToken === accessToken) {
-        personalToken = null;
-        personalReauthRequired = true;
+      if (!signal.aborted && error.code === 'REAUTH_REQUIRED' && localToken?.accessToken === accessToken) {
+        const {remembered} = localToken;
+        localToken = null;
+        tokenReauthRequired = true;
         session?.controller.abort(error);
-        void store?.clear().catch(() => {});
+        if (remembered) void store?.clear().catch(() => {});
       }
       throw error;
     });
@@ -53,15 +58,15 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
     return {...name, id: metadata.id};
   }
 
-  async function checkPersonalToken (remote, accessToken, signal, expectedId) {
+  async function verifyToken (remote, accessToken, signal, expectedId) {
     const approved = await repository(remote, false, accessToken, signal);
     if (expectedId !== undefined && approved.id !== expectedId) throw new GitServiceError(403, 'FORBIDDEN');
     const user = await github.user(accessToken, signal);
     signal.throwIfAborted();
-    if (typeof user.login !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/u.test(user.login) || user.login === accessToken) {
+    if (!isGitHubLogin(user.login) || user.login === accessToken) {
       throw new GitServiceError(401, 'REAUTH_REQUIRED');
     }
-    return {kind: PERSONAL_TOKEN, accessToken, repository: approved, account: {login: user.login}};
+    return {accessToken, repository: approved, account: {login: user.login}};
   }
 
   async function runAuthOperation (operation) {
@@ -76,16 +81,28 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
     }
   }
 
+  async function connectToken (checked, remember, signal) {
+    const remembered = !!(remember && await store?.write({kind: PERSONAL_TOKEN, ...checked}, signal));
+    signal.throwIfAborted();
+    if (store && !remembered) {
+      await store.clear().catch(() => { throw new GitServiceError(500, 'STORAGE_FAILURE'); });
+    }
+    signal.throwIfAborted();
+    reset();
+    localToken = {...checked, remembered};
+    return getState();
+  }
+
   function getState () {
-    if (personalReauthRequired) return {status: 'reauth-required'};
-    if (personalToken) {
-      return {status: 'connected', account: {...personalToken.account}, remembered: personalToken.remembered};
+    if (tokenReauthRequired) return {status: 'reauth-required'};
+    if (localToken) {
+      return {status: 'connected', account: {...localToken.account}, remembered: localToken.remembered};
     }
     const state = github.getState();
     return authOperation && state.status === 'disconnected' ? {status: 'connecting'} : state;
   }
 
-  const getCredentials = () => personalToken ?? github.getCredentials();
+  const getCredentials = () => localToken ?? github.getCredentials();
 
   const proxy = await startGitProxy({
     request,
@@ -144,16 +161,25 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
         signal.throwIfAborted();
         if (accessToken === null) return null;
         if (!isPersonalToken(accessToken)) throw new GitServiceError(400, 'BAD_REQUEST');
-        const checked = await checkPersonalToken(remote, accessToken, signal);
-        const remembered = !!(remember && await store?.write(checked, signal));
+        const checked = await verifyToken(remote, accessToken, signal);
+        return connectToken(checked, remember, signal);
+      });
+    },
+    async connectGitCredential (remoteUrl, login) {
+      if (!gitCredentialHelper || !confirmGitCredential) throw new GitServiceError(403, 'GIT_UNAVAILABLE');
+      const remote = parseRemote(remoteUrl);
+      if (!isGitHubLogin(login)) throw new GitServiceError(400, 'BAD_REQUEST');
+      return runAuthOperation(async signal => {
+        if (!await gitCredentialHelper.available(remote, signal)) throw new GitServiceError(403, 'GIT_UNAVAILABLE');
         signal.throwIfAborted();
-        if (store && !remembered) {
-          await store.clear().catch(() => { throw new GitServiceError(500, 'STORAGE_FAILURE'); });
-        }
+        const approved = await confirmGitCredential(remote, login, signal);
         signal.throwIfAborted();
-        reset();
-        personalToken = {...checked, remembered};
-        return getState();
+        if (approved !== true) return null;
+        const accessToken = await gitCredentialHelper.read(remote, login, signal);
+        signal.throwIfAborted();
+        const checked = await verifyToken(remote, accessToken, signal);
+        if (checked.account.login.toLowerCase() !== login.toLowerCase()) throw new GitServiceError(403, 'FORBIDDEN');
+        return connectToken(checked, false, signal);
       });
     },
     async restore () {
@@ -167,15 +193,15 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
             previous.id <= 0 || typeof previous.owner !== 'string' || typeof previous.repo !== 'string') return false;
         const remote = parseRemote('https://github.com/' + previous.owner + '/' + previous.repo);
         try {
-          const checked = await checkPersonalToken(remote, accessToken, signal, previous.id);
+          const checked = await verifyToken(remote, accessToken, signal, previous.id);
           signal.throwIfAborted();
-          personalReauthRequired = false;
-          personalToken = {...checked, remembered: true};
+          tokenReauthRequired = false;
+          localToken = {...checked, remembered: true};
           return true;
         } catch (error) {
           signal.throwIfAborted();
           if (error.code === 'REAUTH_REQUIRED') {
-            personalReauthRequired = true;
+            tokenReauthRequired = true;
             await store.clear().catch(() => {});
           }
           throw error;
@@ -191,11 +217,11 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
       const ticket = ++revision;
       const credentials = await getCredentials();
       const {account, accessToken, expiresAt = Infinity} = credentials;
-      if (credentials.kind === PERSONAL_TOKEN && !sameRemote(remote, credentials.repository)) {
+      if (credentials.repository && !sameRemote(remote, credentials.repository)) {
         throw new GitServiceError(403, 'FORBIDDEN');
       }
       const approved = await repository(remote, write, accessToken, signal);
-      if (credentials.kind === PERSONAL_TOKEN && approved.id !== credentials.repository.id) {
+      if (credentials.repository && approved.id !== credentials.repository.id) {
         throw new GitServiceError(403, 'FORBIDDEN');
       }
       if (signal.aborted || ticket !== revision || expiresAt <= now()) throw new GitServiceError(401, 'SESSION_EXPIRED');
@@ -208,7 +234,7 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
       return publicSession;
     },
     getSession () {
-      return session && !personalReauthRequired && !expired(session) ? session.public : null;
+      return session && !tokenReauthRequired && !expired(session) ? session.public : null;
     },
     async disconnect () {
       reset();
@@ -223,4 +249,4 @@ async function startDesktopGit ({clientId, request = fetch, now = Date.now, wait
   };
 }
 
-module.exports = {startDesktopGit, PERSONAL_TOKEN};
+module.exports = {startDesktopGit, PERSONAL_TOKEN, GIT_CREDENTIAL_HELPER};
