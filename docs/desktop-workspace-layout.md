@@ -9,7 +9,7 @@
 
 ## 採用版の記録
 
-Desktop は Workbench を直接の依存にしない。固定 Editor の `package.json`・`package-lock.json` が npm の完全一致版と SHA-512 integrity で固定し、`npm run webpack:plus` がその版を解決してインストール済みの版と照合したうえで、Plus レンダラーの `build-info.json` の `editorLayout` に記録する。開発用 artifact の作成時も同じ照合を行う。検証結果を報告するときは、この `editorLayout.version` を採用版として示す。
+Desktop は Workbench（旧 Layout）を直接の依存にしない。固定 Editor の `package.json`・`package-lock.json` が npm の完全一致版と SHA-512 integrity で固定し、`npm run webpack:plus` がその版を解決してインストール済みの版と照合したうえで、Plus レンダラーの `build-info.json` の `editorWorkbench` に記録する。開発用 artifact の作成時も同じ照合を行う。検証結果を報告するときは、この `editorWorkbench.version` を採用版として示す。
 
 ## 検証
 

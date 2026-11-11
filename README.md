@@ -34,6 +34,7 @@ Electron のウィンドウや macOS のクリップボードを使う検証は�
 
 | コマンド | 検証手順 |
 | --- | --- |
+| `npm run test:macos:local-git` | [ローカル Git パネルの書き込み](docs/local-git-panel.md) |
 | `npm run test:macos:project-process` | [作品分離と排他](docs/project-process-lock.md) |
 | `npm run test:macos:project-transfer` | [作品間転送](docs/project-json-transfer.md) |
 
@@ -49,7 +50,7 @@ profile_dir=$(mktemp -d)
 TW_PLUS_DESKTOP_DATA_DIR="$profile_dir" TW_PLUS_DESKTOP_RENDERER=1 npm run electron:start
 ```
 
-ビルドは Editor の Desktop 用 webpack 設定と GUI の既存接続口を使います。Plus renderer とそのアドオン設定画面は同じ固定 GUI からビルドします。成果物の `dist-renderer-webpack/editor/plus-gui/build-info.json` に Desktop・Electron・Editor・GUI・VM の採用版と、固定 Editor が採用する `@kubohiroya/turbowarp-plus-editor-layout` の版・取得元・SHA-512 integrity（`editorLayout`）を記録し、同梱パッケージとライセンスの索引を添えます。Layout の版は Editor の `package.json`・`package-lock.json` から解決し、インストール済みの版と一致しなければビルドを止めます。
+ビルドは Editor の Desktop 用 webpack 設定と GUI の既存接続口を使います。Plus renderer とそのアドオン設定画面は同じ固定 GUI からビルドします。成果物の `dist-renderer-webpack/editor/plus-gui/build-info.json` に Desktop・Electron・Editor・GUI・VM の採用版と、固定 Editor が採用する `@kubohiroya/turbowarp-plus-editor-workbench`（旧 `turbowarp-plus-editor-layout`）の版・取得元・SHA-512 integrity（`editorWorkbench`）を記録し、同梱パッケージとライセンスの索引を添えます。Workbench の版は Editor の `package.json`・`package-lock.json` から解決し、インストール済みの版と一致しなければビルドを止めます。
 
 Plus renderer を同梱した配布用アプリでは、通常起動で Plus Editor が開きます。標準 renderer に切り替える場合は、`TW_PLUS_DESKTOP_RENDERER=0` を指定して起動します。標準 renderer では、Plus 作品や内容を判定できない既存ファイルへの上書きが拒否されます。別名で新規保存するか、Plus renderer で作品を開き直してください。
 
@@ -59,7 +60,29 @@ Plus editor の別窓を検証する場合は、[Desktop の権限境界](docs/d
 
 通常の Plus Editor 開発起動時に `TW_PLUS_DESKTOP_GIT_CLIENT_ID` へ device flow を有効にした GitHub App の公開 client ID を指定すると、Editor のトップフレームに `EditorPreload.localGit` が公開されます。認証後に選択リポジトリの許可を取得し、その短命セッションを Git Smart HTTP アダプターへ渡します。保存を選択した場合は OS の保護機能で暗号化し、保護機能が利用できない環境ではメモリ内で利用します。切断するとセッションと保存済みの資格情報を削除します。
 
+GitHub App には次の設定が必要です。作り方は [GitHub App の作り方](https://github.com/kubohiroya/hierarchidb/blob/main/packages/backend/bff/docs/github-app-setup.md)（英語）を参照してください。
+
+- Enable Device Flow: オン（Desktop は device flow でログインします）
+- Expire user authorization tokens: オン（期限付きのトークンと更新用のトークンを前提にしています。オフだと更新用のトークンが返らず、接続に失敗します）
+- Repository permissions: Contents は Read and write、Pull requests は Read and write、Metadata は Read-only。ほかの権限は付けません
+
+Desktop は device flow を使うので、必要なのは公開してよい client ID だけです。クライアントシークレットや private key は使いません。現在の Desktop は client ID を開発起動時の環境変数 `TW_PLUS_DESKTOP_GIT_CLIENT_ID` からだけ読み（`src-main/windows/editor.js`）、配布版に client ID を入れる仕組みはまだありません。そのため、配布版でローカル Git の GitHub 接続を使うには、client ID が同梱されるまでの間、使う人が自分で上記の GitHub App を作り、client ID を環境変数で渡す必要があります。
+
 push の `git-receive-pack` POST には `Git-Push-Id`（小文字の UUID v4）が必要です。上流への送信前に有効なセッションで ID を予約し、同じ ID が届いた場合は `409 PUSH_DUPLICATE` を返します。予約はセッションの寿命に合わせて保持されます。 [共通契約](https://github.com/kubohiroya/turbowarp-plus-editor/issues/316)
+
+PR の一覧・題名・本文の読み取りとレビューの送信には、ループバックプロキシの GitHub API 経路（`/v1/github/<owner>/<repo>/…`）を使います。既定では無効で、開発起動時に `TW_PLUS_DESKTOP_GIT_GITHUB_API` へ有効にする経路のまとまりをコンマ区切りで指定します。
+
+```sh
+TW_PLUS_DESKTOP_GIT_CLIENT_ID=<client ID> TW_PLUS_DESKTOP_GIT_GITHUB_API=pulls-read,review-threads,reviews-body npm run electron:start
+```
+
+- `pulls-read`: PR の一覧（`GET /pulls`）と1件（`GET /pulls/<n>`）
+- `review-threads`: 固定の5つの GraphQL 操作（`POST /graphql/<操作名>`）。`project.source.json` へのファイル単位のスレッドを付けたレビューを送ります
+- `reviews-body`: レビューの一覧（`GET /pulls/<n>/reviews`）と本文だけのレビューの送信（`POST /pulls/<n>/reviews`）。`review-threads` を切った環境での代わりの経路です
+
+無効のまとまりの経路は `404 GITHUB_API_UNAVAILABLE`、未知の値や重複した値を指定すると全経路が `500 GITHUB_API_MISCONFIGURED` になります。`review-threads` だけを外すと GraphQL の経路だけが止まり、Editor は本文だけの送信に切り替わります。Git Smart HTTP の経路は設定の影響を受けません。
+
+レビューの送信には、Editor が `authorizeRepository(remote, write, review)` の第3引数に `true` を渡して得た `review` 付きのセッションが必要です。GitHub のトークンとノード ID はメインプロセスに留め、Renderer には返しません。1回のレビューの送信は `Review-Submit-Id`（小文字の UUID v4）で表し、その手順の記録はセッションのメモリに `Git-Push-Id` とは別に合わせて 256 件まで持ち、切断・置換・期限切れで消します。経路・検証・応答・エラーの契約は Cloudflare 側と同じです。 [GitHub API routes](https://github.com/kubohiroya/hierarchidb/blob/main/packages/backend/bff/docs/git-smart-http.md#github-api-routes)（英語）
 
 ## 開発プロファイル
 
