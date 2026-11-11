@@ -60,6 +60,14 @@ Plus editor の別窓を検証する場合は、[Desktop の権限境界](docs/d
 
 通常の Plus Editor 開発起動時に `TW_PLUS_DESKTOP_GIT_CLIENT_ID` へ device flow を有効にした GitHub App の公開 client ID を指定すると、Editor のトップフレームに `EditorPreload.localGit` が公開されます。認証後に選択リポジトリの許可を取得し、その短命セッションを Git Smart HTTP アダプターへ渡します。保存を選択した場合は OS の保護機能で暗号化し、保護機能が利用できない環境ではメモリ内で利用します。切断するとセッションと保存済みの資格情報を削除します。
 
+GitHub App には次の設定が必要です。作り方は [GitHub App の作り方](https://github.com/kubohiroya/hierarchidb/blob/main/packages/backend/bff/docs/github-app-setup.md)（英語）を参照してください。
+
+- Enable Device Flow: オン（Desktop は device flow でログインします）
+- Expire user authorization tokens: オン（期限付きのトークンと更新用のトークンを前提にしています。オフだと更新用のトークンが返らず、接続に失敗します）
+- Repository permissions: Contents は Read and write、Pull requests は Read and write、Metadata は Read-only。ほかの権限は付けません
+
+Desktop は device flow を使うので、必要なのは公開してよい client ID だけです。クライアントシークレットや private key は使いません。現在の Desktop は client ID を開発起動時の環境変数 `TW_PLUS_DESKTOP_GIT_CLIENT_ID` からだけ読み（`src-main/windows/editor.js`）、配布版に client ID を入れる仕組みはまだありません。そのため、配布版でローカル Git の GitHub 接続を使うには、client ID が同梱されるまでの間、使う人が自分で上記の GitHub App を作り、client ID を環境変数で渡す必要があります。
+
 push の `git-receive-pack` POST には `Git-Push-Id`（小文字の UUID v4）が必要です。上流への送信前に有効なセッションで ID を予約し、同じ ID が届いた場合は `409 PUSH_DUPLICATE` を返します。予約はセッションの寿命に合わせて保持されます。 [共通契約](https://github.com/kubohiroya/turbowarp-plus-editor/issues/316)
 
 ## 開発プロファイル
