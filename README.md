@@ -56,9 +56,19 @@ Plus renderer を同梱した配布用アプリでは、通常起動で Plus Edi
 
 Plus editor の別窓を検証する場合は、[Desktop の権限境界](docs/desktop-security-boundaries.md) を参照してください。
 
-### ローカル Git の開発接続
+### ローカル Git の GitHub 接続
 
 通常の Plus Editor 開発起動時に `TW_PLUS_DESKTOP_GIT_CLIENT_ID` へ device flow を有効にした GitHub App の公開 client ID を指定すると、Editor のトップフレームに `EditorPreload.localGit` が公開されます。認証後に選択リポジトリの許可を取得し、その短命セッションを Git Smart HTTP アダプターへ渡します。保存を選択した場合は OS の保護機能で暗号化し、保護機能が利用できない環境ではメモリ内で利用します。切断するとセッションと保存済みの資格情報を削除します。
+
+Device Flow では Desktop の画面に表示されたコードだけを GitHub に入力してください。他人から届いたコードは入力しないでください。接続の承認は GitHub の [Authorized GitHub Apps](https://github.com/settings/apps/authorizations) で取り消せます。配布用 App の悪用が疑われる場合は、配布者が App の Device Flow を停止し、必要に応じて App を作り直して公開 client ID を差し替えます。
+
+#### Fine-grained personal access token
+
+GitHub の設定で、接続したいリポジトリだけを選び、Contents を読み取り専用、push が必要なら読み書きに設定します。有効期限も設定してください。 [GitHub のトークン作成手順](https://docs.github.com/ja/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token)
+
+Desktop は OS のマスク付きダイアログで `github_pat_` から始まるトークンを受け取り、選択したリポジトリの ID と操作権限を確認します。Linux では Zenity または KDialog が使える環境で利用できます。保存は任意で、OS の保護機能を利用できる場合は暗号化します。期限切れや失効の後は、新しいトークンで接続し直してください。
+
+方式選択に対応する Editor は、トップフレームの `EditorPreload.localGitAuth.getAuthMethods()` で利用可能な方式を調べ、`fine-grained-pat` がある場合に `connectPersonalAccessToken(remote, remember)` を呼べます。トークンの入力画面は Desktop が表示します。旧 Editor の Device Flow 用 API は `EditorPreload.localGit` です。切り戻すときは必要に応じて先に切断し、`TW_PLUS_DESKTOP_GIT_PERSONAL_ACCESS_TOKEN=0` を指定して起動します。
 
 push の `git-receive-pack` POST には `Git-Push-Id`（小文字の UUID v4）が必要です。上流への送信前に有効なセッションで ID を予約し、同じ ID が届いた場合は `409 PUSH_DUPLICATE` を返します。予約はセッションの寿命に合わせて保持されます。 [共通契約](https://github.com/kubohiroya/turbowarp-plus-editor/issues/316)
 

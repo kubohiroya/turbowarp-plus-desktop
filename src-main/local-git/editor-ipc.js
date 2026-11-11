@@ -1,10 +1,14 @@
 const {GitServiceError} = require('./github-auth');
-const {startDesktopGit} = require('./service');
+const {startDesktopGit, PERSONAL_TOKEN} = require('./service');
 
 const EDITOR_DOCUMENT = 'tw-editor://./plus-gui/gui.html';
 let active = null;
 
-function installEditorGit (ipc, webContents, {clientId, store}) {
+function installEditorGit (ipc, webContents, {clientId, store, promptPersonalToken}) {
+  const methods = [];
+  if (clientId) methods.push('github-app');
+  if (promptPersonalToken) methods.push(PERSONAL_TOKEN);
+
   function trusted (event) {
     return event.sender === webContents && event.senderFrame === webContents.mainFrame &&
       typeof event.senderFrame?.url === 'string' && event.senderFrame.url.split(/[?#]/u, 1)[0] === EDITOR_DOCUMENT;
@@ -12,7 +16,7 @@ function installEditorGit (ipc, webContents, {clientId, store}) {
 
   async function getService (start) {
     if (!active && start) {
-      const service = startDesktopGit({clientId, store});
+      const service = startDesktopGit({clientId, store, promptPersonalToken});
       const lease = {owner: webContents, service};
       active = lease;
       service.catch(() => { if (active === lease) active = null; });
@@ -27,7 +31,7 @@ function installEditorGit (ipc, webContents, {clientId, store}) {
     if (lease?.owner !== webContents) {
       if (forget) {
         if (lease) throw new GitServiceError(409, 'GIT_IN_USE');
-        await store.clear();
+        await store?.clear();
       }
       return;
     }
@@ -51,7 +55,8 @@ function installEditorGit (ipc, webContents, {clientId, store}) {
     }
   }
 
-  ipc.on('local-git-enabled', event => { event.returnValue = trusted(event); });
+  ipc.on('local-git-enabled', event => { event.returnValue = !!clientId && trusted(event); });
+  ipc.on('local-git-auth-enabled', event => { event.returnValue = methods.length > 0 && trusted(event); });
   const handle = (name, action) => ipc.handle('local-git-' + name, async (event, ...args) => {
     if (!trusted(event)) throw new Error('GIT_UNAVAILABLE');
     try {
@@ -61,9 +66,24 @@ function installEditorGit (ipc, webContents, {clientId, store}) {
         error?.name === 'AbortError' ? 'ABORTED' : 'GIT_UNAVAILABLE');
     }
   });
+  handle('auth-methods', () => methods);
+  handle('connect-personal-access-token', async (remote, remember) => {
+    if (!promptPersonalToken) throw new GitServiceError(403, 'GIT_UNAVAILABLE');
+    const pending = getService(true);
+    const lease = active;
+    const service = await pending;
+    try {
+      return await service.connectPersonalAccessToken(remote, remember);
+    } finally {
+      if (active === lease && service.getState().status === 'disconnected') await release(false);
+    }
+  });
   handle('connection', async () => (await getService(false))?.connection ?? null);
   handle('state', async () => (await getService(false))?.getState() ?? {status: 'disconnected'});
-  handle('begin', async remember => (await getService(true)).begin(remember));
+  handle('begin', async remember => {
+    if (!clientId) throw new GitServiceError(403, 'GIT_UNAVAILABLE');
+    return (await getService(true)).begin(remember);
+  });
   handle('restore', async () => {
     const restored = await (await getService(true)).restore();
     if (!restored) await release(false);

@@ -52,7 +52,7 @@ function fixture (onGit = () => new Response('git-bytes', {headers: {'Content-Ty
       }
       if (pathname === '/user') return Response.json({login: 'fixture-user'});
       if (pathname.startsWith('/repos/')) {
-        assert.match(options.headers.Authorization, /^Bearer ghu_/u);
+        assert.match(options.headers.Authorization, /^Bearer (?:ghu_|github_pat_)/u);
         const repository = repositories.get(pathname);
         return repository ? Response.json(repository) : new Response(null, {status: 404});
       }
@@ -366,18 +366,210 @@ test('Git preload handlers accept only the Plus Editor top frame', async () => {
   installEditorGit(ipc, contents, {clientId: 'Iv1_test', store: {}});
   const accepted = {sender: contents, senderFrame: contents.mainFrame};
   const assertEnabled = (event, expected) => {
-    ipc.emit('local-git-enabled', event);
-    assert.equal(event.returnValue, expected);
+    for (const channel of ['local-git-enabled', 'local-git-auth-enabled']) {
+      ipc.emit(channel, event);
+      assert.equal(event.returnValue, expected);
+    }
   };
   assertEnabled(accepted, true);
   assert.deepEqual(await handlers.get('local-git-state')(accepted), {status: 'disconnected'});
+  assert.deepEqual(await handlers.get('local-git-auth-methods')(accepted), ['github-app']);
+  await assert.rejects(handlers.get('local-git-connect-personal-access-token')(accepted, desktopRemote),
+    {message: 'GIT_UNAVAILABLE'});
   const iframe = {sender: contents, senderFrame: {...contents.mainFrame}};
   const other = {sender: new EventEmitter(), senderFrame: contents.mainFrame};
   for (const event of [iframe, other]) {
     assertEnabled(event, false);
     await assert.rejects(handlers.get('local-git-state')(event), {message: 'GIT_UNAVAILABLE'});
+    await assert.rejects(handlers.get('local-git-connect-personal-access-token')(event, desktopRemote),
+      {message: 'GIT_UNAVAILABLE'});
   }
   contents.mainFrame.url = 'tw-editor://./plus-gui/addons.html';
   assertEnabled(accepted, false);
   await assert.rejects(handlers.get('local-git-state')(accepted), {message: 'GIT_UNAVAILABLE'});
+});
+
+test('token-only auth stays hidden from older Editors and cancellation releases the connection', async t => {
+  const {EventEmitter} = require('node:events');
+  const {installEditorGit} = require('../src-main/local-git/editor-ipc');
+  const ipc = new EventEmitter();
+  const handlers = new Map();
+  ipc.handle = (name, handler) => handlers.set(name, handler);
+  const contents = new EventEmitter();
+  contents.mainFrame = {url: 'tw-editor://./plus-gui/gui.html'};
+  installEditorGit(ipc, contents, {promptPersonalToken: async () => null});
+  const event = {sender: contents, senderFrame: contents.mainFrame};
+  ipc.emit('local-git-enabled', event);
+  assert.equal(event.returnValue, false);
+  ipc.emit('local-git-auth-enabled', event);
+  assert.equal(event.returnValue, true);
+  assert.deepEqual(await handlers.get('local-git-auth-methods')(event), ['fine-grained-pat']);
+  t.after(() => handlers.get('local-git-disconnect')(event));
+  await assert.rejects(handlers.get('local-git-begin')(event), {message: 'GIT_UNAVAILABLE'});
+  assert.equal(await handlers.get('local-git-connect-personal-access-token')(event, desktopRemote), null);
+  assert.equal(await handlers.get('local-git-connection')(event), null);
+});
+
+test('fine-grained token uses the same repository and operation checks as Device Flow', async t => {
+  const token = 'github_pat_fixture';
+  let revoked = false;
+  const upstream = fixture((url, options) => {
+    assert.equal(options.headers.Authorization, 'Basic ' + Buffer.from('x-access-token:' + token).toString('base64'));
+    assert.match(url, /^https:\/\/github\.com\/owner\/project\.git\//u);
+    if (options.method === 'POST') {
+      return new Response('git-result', {headers: {'Content-Type': 'application/x-git-receive-pack-result'}});
+    }
+    return new Response('git-bytes', {headers: {'Content-Type': readType}});
+  });
+  upstream.repositories.set('/repos/OWNER/Project', upstream.repositories.get('/repos/owner/project'));
+  const service = await startDesktopGit({
+    ...upstream,
+    request: (url, options) => revoked && new URL(url).hostname === 'api.github.com'
+      ? new Response(null, {status: 401}) : upstream.request(url, options),
+    promptPersonalToken: async remote => {
+      assert.deepEqual(remote, {owner: 'OWNER', repo: 'Project'});
+      return token;
+    }
+  });
+  t.after(() => service.close());
+  await assert.rejects(service.begin(), {code: 'GIT_UNAVAILABLE'});
+  assert.deepEqual(await service.connectPersonalAccessToken('https://github.com/OWNER/Project'), {
+    status: 'connected', account: {login: 'fixture-user'}, remembered: false
+  });
+  assert.equal(upstream.calls[0].url, 'https://api.github.com/repos/OWNER/Project');
+  assert.equal(upstream.calls[0].options.headers.Authorization, 'Bearer ' + token);
+  assert.equal(upstream.calls.some(call => call.url.includes(token)), false);
+
+  const before = upstream.calls.length;
+  await assert.rejects(service.createSession('https://github.com/owner/other'), {code: 'FORBIDDEN'});
+  assert.equal(upstream.calls.length, before);
+
+  const metadata = upstream.repositories.get('/repos/OWNER/Project');
+  metadata.id = 2;
+  await assert.rejects(service.createSession(desktopRemote), {code: 'FORBIDDEN'});
+  metadata.id = 1;
+  metadata.permissions.push = false;
+  await assert.rejects(service.createSession(desktopRemote, true), {code: 'FORBIDDEN'});
+  const read = await service.createSession(desktopRemote);
+  assert.equal(read.expiresAt, upstream.now() + 300_000);
+  assert.equal(JSON.stringify(read).includes(token), false);
+  assert.equal(await (await call(service, read)).text(), 'git-bytes');
+
+  const push = {method: 'POST', headers: {'Content-Type': writeType, 'Git-Push-Id': pushId}, body: 'git-pack'};
+  await error(call(service, read, route + receive, push), 403, 'FORBIDDEN');
+  metadata.permissions.push = true;
+  const write = await service.createSession(desktopRemote, true);
+  assert.equal(await (await call(service, write, route + receive, push)).text(), 'git-result');
+  await error(call(service, write, route + receive, push), 409, 'PUSH_DUPLICATE');
+  const gitCalls = () => upstream.calls.filter(call => call.url.startsWith('https://github.com/')).length;
+  assert.equal(gitCalls(), 2);
+
+  metadata.id = 2;
+  await error(call(service, write), 403, 'FORBIDDEN');
+  metadata.id = 1;
+  revoked = true;
+  await error(call(service, write), 401, 'REAUTH_REQUIRED');
+  assert.deepEqual(service.getState(), {status: 'reauth-required'});
+  assert.equal(service.getSession(), null);
+  assert.equal(gitCalls(), 2);
+  await service.disconnect();
+  await error(call(service, write), 401, 'SESSION_REQUIRED');
+});
+
+test('token entry rejects invalid input and cannot complete after disconnect', async t => {
+  const upstream = fixture();
+  let token = 'ghp_classic';
+  let resolvePrompt;
+  const service = await startDesktopGit({
+    ...upstream, promptPersonalToken: async () => token === undefined
+      ? new Promise(resolve => { resolvePrompt = resolve; })
+      : token
+  });
+  t.after(() => service.close());
+
+  await assert.rejects(service.connectPersonalAccessToken(desktopRemote), {code: 'BAD_REQUEST'});
+  token = null;
+  assert.equal(await service.connectPersonalAccessToken(desktopRemote), null);
+  assert.equal(upstream.calls.length, 0);
+
+  token = 'github_pat_fixture';
+  await assert.rejects(service.connectPersonalAccessToken('https://github.com/owner/unknown'), {code: 'FORBIDDEN'});
+  assert.equal(service.getState().status, 'disconnected');
+  assert.equal(upstream.calls.length, 1);
+
+  token = undefined;
+  const connecting = service.connectPersonalAccessToken(desktopRemote);
+  assert.deepEqual(service.getState(), {status: 'connecting'});
+  await assert.rejects(service.connectPersonalAccessToken(desktopRemote), {code: 'AUTH_IN_PROGRESS'});
+  await service.disconnect();
+  resolvePrompt('github_pat_fixture');
+  await assert.rejects(connecting, {name: 'AbortError'});
+  assert.equal(upstream.calls.length, 1);
+  assert.equal(service.getState().status, 'disconnected');
+});
+
+test('saved token is revalidated before restore and removed on disconnect', async t => {
+  const upstream = fixture();
+  let record;
+  let promptCount = 0;
+  const store = {
+    read: async () => record,
+    write: async value => { record = value; return true; },
+    clear: async () => { record = undefined; }
+  };
+  const make = () => startDesktopGit({
+    ...upstream, store, promptPersonalToken: async () => {
+      promptCount++;
+      return 'github_pat_fixture';
+    }
+  });
+  const first = await make();
+  t.after(() => first.close());
+  assert.equal((await first.connectPersonalAccessToken(desktopRemote, true)).remembered, true);
+  assert.equal(record.repository.id, 1);
+  await first.close();
+
+  const second = await make();
+  t.after(() => second.close());
+  const metadata = upstream.repositories.get('/repos/owner/project');
+  metadata.id = 2;
+  await assert.rejects(second.restore(), {code: 'FORBIDDEN'});
+  assert.equal(second.getState().status, 'disconnected');
+  metadata.id = 1;
+  assert.equal(await second.restore(), true);
+  assert.equal(second.getState().remembered, true);
+  assert.equal(promptCount, 1);
+  assert.equal(second.getSession(), null);
+  await second.disconnect();
+  assert.equal(record, undefined);
+  assert.equal(await second.restore(), false);
+});
+
+test('native token prompt captures private input and filters helper failures', async () => {
+  const {createPersonalTokenPrompt} = require('../src-main/local-git/personal-token-prompt');
+  const remote = {owner: 'owner', repo: 'project'};
+  const signal = new AbortController().signal;
+  assert.equal(createPersonalTokenPrompt({platform: 'linux', exists: () => false}), undefined);
+  const prompt = createPersonalTokenPrompt({
+    platform: 'linux', exists: file => file === '/usr/bin/zenity',
+    execute: async (file, args, options) => {
+      assert.equal(file, '/usr/bin/zenity');
+      assert.ok(args.includes('--hide-text'));
+      assert.match(args.at(-1), /owner\/project/u);
+      assert.equal(options.signal, signal);
+      return {stdout: 'github_pat_fixture\n'};
+    }
+  });
+  assert.equal(await prompt(remote, signal), 'github_pat_fixture');
+
+  const failed = createPersonalTokenPrompt({
+    platform: 'darwin', exists: () => true,
+    execute: async () => { throw Object.assign(new Error('github_pat_fixture'), {code: 1, stderr: 'internal error'}); }
+  });
+  await assert.rejects(failed(remote, signal), {message: 'TOKEN_PROMPT_FAILED'});
+  const cancelled = createPersonalTokenPrompt({
+    platform: 'darwin', exists: () => true,
+    execute: async () => { throw Object.assign(new Error('helper error'), {code: 1, stderr: 'User canceled. (-128)\n'}); }
+  });
+  assert.equal(await cancelled(remote, signal), null);
 });

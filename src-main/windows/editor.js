@@ -27,14 +27,20 @@ const {isSB3} = require('../project-lock');
 const {ExternalYamlFiles} = require('../external-yaml-files');
 const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
+const {createPersonalTokenPrompt} = require('../local-git/personal-token-prompt');
+const {PERSONAL_TOKEN} = require('../local-git/service');
 const {installEditorPopouts, isReservedPopout} = require('./editor-popouts');
-const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml, workspaceLayout} =
+const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml, workspaceLayout,
+  gitPersonalAccessToken} =
   require('../../config/feature-flags');
 
 const rendererDirectory = plusRenderer ? 'plus-gui' : 'gui';
-const gitClientId = process.env.TW_PLUS_DESKTOP_GIT_CLIENT_ID;
-const gitStore = plusRenderer && !projectProcess.worker && /^[A-Za-z0-9_]+$/u.test(gitClientId || '')
-  ? createCredentialStore({directory: app.getPath('userData'), clientId: gitClientId, safeStorage}) : null;
+const gitEnabled = plusRenderer && !projectProcess.worker;
+const gitClientIdOverride = process.env.TW_PLUS_DESKTOP_GIT_CLIENT_ID;
+const gitClientId = /^[A-Za-z0-9_]+$/u.test(gitClientIdOverride ?? '') ? gitClientIdOverride : undefined;
+const gitTokenPrompt = gitEnabled && gitPersonalAccessToken ? createPersonalTokenPrompt() : undefined;
+const gitStore = gitEnabled && (gitClientId || gitTokenPrompt)
+  ? createCredentialStore({directory: app.getPath('userData'), clientId: gitClientId ?? PERSONAL_TOKEN, safeStorage}) : null;
 if (plusRenderer) {
   const rendererRoot = path.join(__dirname, '../../dist-renderer-webpack/editor', rendererDirectory);
   const buildInfoPath = path.join(rendererRoot, 'build-info.json');
@@ -735,9 +741,12 @@ class EditorWindow extends ProjectRunningWindow {
 
     const editorURL = new URL(`tw-editor://./${rendererDirectory}/gui.html`);
     if (gitStore) {
-      installEditorGit(this.ipc, this.window.webContents, {clientId: gitClientId, store: gitStore});
+      installEditorGit(this.ipc, this.window.webContents, {
+        clientId: gitClientId, store: gitStore, promptPersonalToken: gitTokenPrompt
+      });
     } else {
       this.ipc.on('local-git-enabled', event => { event.returnValue = false; });
+      this.ipc.on('local-git-auth-enabled', event => { event.returnValue = false; });
     }
     this.ipc.on('editor-popouts-enabled', event => { event.returnValue = editorPopouts.size > 0; });
     if (editorPopouts.size) {
