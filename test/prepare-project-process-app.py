@@ -29,7 +29,7 @@ paths = (
     "config/feature-flags.js", "src-main/atomic-write-stream.js", "src-main/brand.js",
     "src-main/entrypoint.js", "src-main/index.js", "src-main/project-lock.js",
     "src-main/project-process.js", "src-main/project-assets.js", "src-main/external-yaml-files.js", "src-main/windows/editor.js",
-    "src-main/standard-renderer-save.js", "src-main/workspace-layout-store.js", "src-main/windows/editor-popouts.js",
+    "src-main/standard-renderer-save.js", "src-main/workspace-project-key.js", "src-main/windows/editor-popouts.js",
     "src-preload/editor.js",
 )
 paths += tuple(file.relative_to(root).as_posix() for file in sorted((root / "src-main/local-git").glob("*.js")))
