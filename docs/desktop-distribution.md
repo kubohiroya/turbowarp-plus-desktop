@@ -14,10 +14,10 @@ Windows 用 NSIS は Ubuntu でクロスビルドする。Wine は NSIS のア�
 
 `Desktop development artifacts` は対象ファイルが変わる PR と手動実行で動く。Desktop のコミット、`config/plus-renderer.json` の Editor、Editor の `site/source.json` が指定する GUI と VM を使う。固定を更新するときは Editor のリモート `main` と照合し、検証する生成物の `build-info.json` と一致させる。
 
-各 runner で通常のレンダラーと Plus レンダラーをビルドし、インストーラーを生成する。パッケージ内の Plus レンダラーと固定リビジョンを照合し、`build-info.json` の `editorLayout` を固定 Editor の lockfile とインストール済みの Layout と照合した後、次を Actions の artifact にまとめる。
+各 runner で通常のレンダラーと Plus レンダラーをビルドし、インストーラーを生成する。パッケージ内の Plus レンダラーと固定リビジョンを照合し、`build-info.json` の `editorWorkbench` を固定 Editor の lockfile とインストール済みの Workbench と照合した後、次を Actions の artifact にまとめる。
 
 - OS ごとのインストーラーと `SHA256SUMS`
-- Desktop・Editor・GUI・VM・Electron、Editor が採用する Layout（`editorLayout`：版・取得元・SHA-512 integrity）と family packages を記録した `build-info.json`
+- Desktop・Editor・GUI・VM・Electron、Editor が採用する Workbench（`editorWorkbench`：版・取得元・SHA-512 integrity）と family packages を記録した `build-info.json`
 - Desktop の `LICENSE`、family package のライセンスと索引、ソースと固定版を示す `source-info.json`
 - 公式素材と Packager の取得元・ハッシュを記録した `library-files.json` と `packager.json`
 
