@@ -33,6 +33,8 @@ const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, e
 
 const rendererDirectory = plusRenderer ? 'plus-gui' : 'gui';
 const gitClientId = process.env.TW_PLUS_DESKTOP_GIT_CLIENT_ID;
+// The GitHub API route groups of the loopback Git proxy, such as `pulls-read,review-threads,reviews-body`. Off by default.
+const gitGitHubApi = process.env.TW_PLUS_DESKTOP_GIT_GITHUB_API;
 const gitStore = plusRenderer && !projectProcess.worker && /^[A-Za-z0-9_]+$/u.test(gitClientId || '')
   ? createCredentialStore({directory: app.getPath('userData'), clientId: gitClientId, safeStorage}) : null;
 if (plusRenderer) {
@@ -735,7 +737,9 @@ class EditorWindow extends ProjectRunningWindow {
 
     const editorURL = new URL(`tw-editor://./${rendererDirectory}/gui.html`);
     if (gitStore) {
-      installEditorGit(this.ipc, this.window.webContents, {clientId: gitClientId, store: gitStore});
+      installEditorGit(this.ipc, this.window.webContents, {
+        clientId: gitClientId, store: gitStore, githubApi: gitGitHubApi
+      });
     } else {
       this.ipc.on('local-git-enabled', event => { event.returnValue = false; });
     }

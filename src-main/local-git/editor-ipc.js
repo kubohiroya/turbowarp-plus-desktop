@@ -4,7 +4,7 @@ const {startDesktopGit} = require('./service');
 const EDITOR_DOCUMENT = 'tw-editor://./plus-gui/gui.html';
 let active = null;
 
-function installEditorGit (ipc, webContents, {clientId, store}) {
+function installEditorGit (ipc, webContents, {clientId, store, githubApi}) {
   function trusted (event) {
     return event.sender === webContents && event.senderFrame === webContents.mainFrame &&
       typeof event.senderFrame?.url === 'string' && event.senderFrame.url.split(/[?#]/u, 1)[0] === EDITOR_DOCUMENT;
@@ -12,7 +12,7 @@ function installEditorGit (ipc, webContents, {clientId, store}) {
 
   async function getService (start) {
     if (!active && start) {
-      const service = startDesktopGit({clientId, store});
+      const service = startDesktopGit({clientId, store, githubApi});
       const lease = {owner: webContents, service};
       active = lease;
       service.catch(() => { if (active === lease) active = null; });
@@ -70,7 +70,8 @@ function installEditorGit (ipc, webContents, {clientId, store}) {
     return restored;
   });
   handle('finish', async () => (await getService(false))?.finish() ?? null);
-  handle('authorize', async (remote, write) => (await getService(false))?.createSession(remote, write) ?? null);
+  handle('authorize', async (remote, write, review) =>
+    (await getService(false))?.createSession(remote, write, review) ?? null);
   handle('session', async () => (await getService(false))?.getSession() ?? null);
   handle('disconnect', () => release(true));
 

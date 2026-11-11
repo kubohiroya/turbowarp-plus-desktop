@@ -17,11 +17,12 @@ function tokens (suffix = 'one', expires = 3600) {
   return {access_token: 'ghu_' + suffix, refresh_token: 'ghr_' + suffix, expires_in: expires, refresh_token_expires_in: 7200};
 }
 
-function fixture (onGit = () => new Response('git-bytes', {headers: {'Content-Type': readType}})) {
+function fixture (onGit = () => new Response('git-bytes', {headers: {'Content-Type': readType}}), onApi = null) {
   let time = 100_000;
   const waitTimes = [];
   const calls = [];
   const oauthResponses = [];
+  const lookups = [];
   const repositories = new Map([
     ['/repos/owner/project', {id: 1, full_name: 'owner/project', permissions: {pull: true, push: true}}],
     ['/repos/owner/renamed', {id: 1, full_name: 'owner/renamed', permissions: {pull: true, push: true}}],
@@ -29,7 +30,7 @@ function fixture (onGit = () => new Response('git-bytes', {headers: {'Content-Ty
     ['/repos/owner/readonly', {id: 3, full_name: 'owner/readonly', permissions: {pull: true, push: false}}]
   ]);
   return {
-    calls, oauthResponses, waitTimes, repositories,
+    calls, oauthResponses, waitTimes, repositories, lookups,
     now: () => time,
     advance: milliseconds => { time += milliseconds; },
     wait: async (milliseconds, _value, {signal}) => {
@@ -51,7 +52,11 @@ function fixture (onGit = () => new Response('git-bytes', {headers: {'Content-Ty
         return Response.json(oauthResponses.shift() ?? tokens());
       }
       if (pathname === '/user') return Response.json({login: 'fixture-user'});
+      if (onApi && (pathname === '/graphql' || /^\/repos\/[^/]+\/[^/]+\/pulls(?:\/|$)/u.test(pathname))) {
+        return onApi(url, options);
+      }
       if (pathname.startsWith('/repos/')) {
+        if (lookups.length) return lookups.shift()();
         assert.match(options.headers.Authorization, /^Bearer ghu_/u);
         const repository = repositories.get(pathname);
         return repository ? Response.json(repository) : new Response(null, {status: 404});
@@ -380,4 +385,637 @@ test('Git preload handlers accept only the Plus Editor top frame', async () => {
   contents.mainFrame.url = 'tw-editor://./plus-gui/addons.html';
   assertEnabled(accepted, false);
   await assert.rejects(handlers.get('local-git-state')(accepted), {message: 'GIT_UNAVAILABLE'});
+});
+
+// GitHub API routes (/v1/github/<owner>/<repo>/...). The stub below stands in for api.github.com: the pull request,
+// the viewer's pending review and published reviews, and every mutation it applied.
+
+const {githubReviewDocuments} = require('../src-main/local-git/github-review-documents');
+const reviewRecords = require('../src-main/local-git/review-submits');
+
+const apiRoot = '/v1/github/owner/project';
+const allGroups = 'pulls-read,review-threads,reviews-body';
+const head = 'a'.repeat(40);
+const submitId = (index = 1) => '00000000-0000-4000-8000-' + String(index).padStart(12, '0');
+const projectFile = 'game/project.source.json';
+
+function gitHubStub () {
+  const stub = {
+    calls: [], mutations: [], faults: [], pending: null, reviews: [], nextId: 1, repositoryId: 1, viewer: 'reviewer',
+    graphqlHeaders: {}
+  };
+  const json = (value, headers = {}) => Response.json(value, {headers});
+  const take = operation => {
+    const index = stub.faults.findIndex(fault => fault.operation === operation);
+    return index < 0 ? null : stub.faults.splice(index, 1)[0];
+  };
+  const user = {login: 'author', id: 9, node_id: 'U_author'};
+  const pullSummary = number => ({
+    number, title: 'Title ' + number, state: 'open', draft: false, merged_at: null, updated_at: '2026-11-11T00:00:00Z',
+    user, node_id: 'PR_node', head: {sha: head, ref: 'feature', label: 'x', repo: {full_name: 'owner/project'}},
+    base: {sha: 'b'.repeat(40), ref: 'main', repo: {full_name: 'owner/project'}}, _links: {}
+  });
+  const restReview = review => ({
+    id: review.databaseId, node_id: review.id, user: {login: stub.viewer, node_id: 'U_viewer'}, commit_id: review.commitOid,
+    state: review.state, submitted_at: review.submittedAt, body: review.body, html_url: review.url
+  });
+
+  function graphql (operation, variables) {
+    const pull = stub.pending;
+    switch (operation) {
+      case 'pullRequestReviewContext':
+        assert.deepEqual(Object.keys(variables).sort(), ['name', 'number', 'owner']);
+        return {data: {viewer: {login: stub.viewer}, repository: {
+          databaseId: stub.repositoryId,
+          pullRequest: variables.number !== 7 ? null : {
+            id: 'PR_node', headRefOid: head,
+            pending: {nodes: pull ? [{id: pull.id, viewerDidAuthor: true, createdAt: '2026-11-11T00:00:00Z', body: pull.body,
+              commit: {oid: pull.commitOid}, comments: {totalCount: pull.threads.length}}] : []},
+            recent: {nodes: stub.reviews.map(review => ({id: review.id, viewerDidAuthor: true, state: review.state,
+              submittedAt: review.submittedAt, commit: {oid: review.commitOid}}))}
+          }
+        }}};
+      case 'addPullRequestReview': {
+        assert.deepEqual(variables, {pullRequestId: 'PR_node', commitOid: variables.commitOid});
+        stub.pending = {id: 'PRR_' + stub.nextId++, commitOid: variables.commitOid, body: '', threads: []};
+        return {data: {addPullRequestReview: {pullRequestReview: {id: stub.pending.id, state: 'PENDING',
+          commit: {oid: variables.commitOid}, pullRequest: {id: 'PR_node'}}}}};
+      }
+      case 'addPullRequestReviewThread':
+        if (!pull || pull.id !== variables.reviewId) return {data: null, errors: [{type: 'NOT_FOUND', message: 'secret'}]};
+        pull.threads.push(variables.path);
+        return {data: {addPullRequestReviewThread: {thread: {id: 'PRRT_' + stub.nextId++, path: variables.path,
+          subjectType: 'FILE'}}}};
+      case 'submitPullRequestReview': {
+        if (!pull || pull.id !== variables.reviewId) return {data: null, errors: [{type: 'NOT_FOUND'}]};
+        const state = {COMMENT: 'COMMENTED', APPROVE: 'APPROVED', REQUEST_CHANGES: 'CHANGES_REQUESTED'}[variables.event];
+        const review = {...pull, state, body: variables.body, submittedAt: '2026-11-11T01:00:00Z', databaseId: stub.nextId++,
+          url: 'https://github.com/owner/project/pull/7#pullrequestreview-' + stub.nextId};
+        stub.reviews.push(review);
+        stub.pending = null;
+        return {data: {submitPullRequestReview: {pullRequestReview: {id: review.id, state, submittedAt: review.submittedAt,
+          url: review.url, commit: {oid: review.commitOid}}}}};
+      }
+      case 'deletePullRequestReview':
+        if (!pull || pull.id !== variables.reviewId) return {data: null, errors: [{type: 'NOT_FOUND'}]};
+        stub.pending = null;
+        return {data: {deletePullRequestReview: {pullRequestReview: {id: pull.id}}}};
+    }
+    assert.fail('Unexpected GraphQL operation');
+  }
+
+  stub.handle = async (url, options) => {
+    const {search} = new URL(url);
+    // GitHub matches names without regard to case.
+    const pathname = new URL(url).pathname.toLowerCase();
+    const body = options.body === undefined ? undefined : JSON.parse(options.body);
+    const operation = pathname === '/graphql'
+      ? Object.keys(githubReviewDocuments).find(name => githubReviewDocuments[name] === body.query)
+      : options.method === 'POST' ? 'createReview' : 'rest';
+    assert.ok(operation, 'Only the fixed GraphQL documents reach GitHub');
+    stub.calls.push({url, operation, headers: options.headers, body, redirect: options.redirect});
+    const fault = take(operation);
+    if (fault?.entered) fault.entered.resolve();
+    if (fault?.gate) await fault.gate;
+    if (operation !== 'pullRequestReviewContext' && operation !== 'rest' && (!fault || fault.apply)) {
+      stub.mutations.push(operation);
+    }
+    let result;
+    if (!fault || fault.apply) {
+      if (pathname === '/graphql') result = json(graphql(operation, body.variables), stub.graphqlHeaders);
+      else if (pathname === '/repos/owner/project/pulls') {
+        assert.match(search, /^\?state=all&sort=updated&direction=desc&per_page=20&page=[0-9]+$/u);
+        result = json([pullSummary(7), pullSummary(8)], {'Set-Cookie': 'upstream=1', 'x-ratelimit-remaining': '4999'});
+      } else if (pathname === '/repos/owner/project/pulls/7' && !search) {
+        result = json({...pullSummary(7), body: 'markdown', body_text: 'plain', changed_files: 3,
+          head: {sha: head, ref: 'feature', repo: null}, merge_commit_sha: 'x'});
+      } else if (pathname === '/repos/owner/project/pulls/7/reviews' && options.method === 'POST') {
+        const review = {id: 'PRR_' + stub.nextId, databaseId: stub.nextId++, commitOid: body.commit_id, body: body.body ?? '',
+          state: {COMMENT: 'COMMENTED', APPROVE: 'APPROVED', REQUEST_CHANGES: 'CHANGES_REQUESTED'}[body.event],
+          submittedAt: '2026-11-11T01:00:00Z', url: 'https://github.com/owner/project/pull/7#pullrequestreview-1'};
+        stub.reviews.push(review);
+        result = json(restReview(review));
+      } else if (pathname === '/repos/owner/project/pulls/7/reviews') {
+        assert.match(search, /^\?per_page=30&page=[0-9]+$/u);
+        result = json(stub.reviews.map(restReview));
+      } else {
+        result = new Response(null, {status: 404});
+      }
+    }
+    if (fault?.response) {
+      await result?.body?.cancel();
+      return fault.response();
+    }
+    return result;
+  };
+  return stub;
+}
+
+async function startApi (t, {githubApi = allGroups, review = true, onGit} = {}) {
+  const github = gitHubStub();
+  const upstream = fixture(onGit, github.handle);
+  const service = await startDesktopGit({clientId: 'Iv1_test', ...upstream, githubApi});
+  t.after(() => service.close());
+  await service.begin();
+  await service.finish();
+  const session = await service.createSession(desktopRemote, false, review);
+  const api = (path, options = {}) => call(service, options.session === undefined ? session : options.session,
+    apiRoot + path, options);
+  const graphql = (operation, variables, id, options = {}) => {
+    const body = JSON.stringify(variables);
+    return api('/graphql/' + operation, {...options, method: 'POST', body, headers: {
+      'Content-Type': 'application/json', ...(id && {'Review-Submit-Id': id}), ...options.headers
+    }});
+  };
+  const createReview = (value, id = submitId(1), options = {}) => api('/pulls/7/reviews', {...options, method: 'POST',
+    body: JSON.stringify(value), headers: {'Content-Type': 'application/json', 'Review-Submit-Id': id, ...options.headers}});
+  const apiCalls = () => github.calls.length;
+  return {github, upstream, service, session, api, graphql, createReview, apiCalls};
+}
+
+async function ok (request) {
+  const response = await request;
+  const text = await response.text();
+  assert.equal(response.status, 200, text);
+  assert.equal(response.headers.get('content-type'), 'application/json');
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.equal(response.headers.get('access-control-allow-origin'), EDITOR_ORIGIN);
+  for (const secret of ['ghu_', 'PR_node', 'PRR_', 'PRRT_', 'U_author', 'node_id']) assert.equal(text.includes(secret), false);
+  return JSON.parse(text);
+}
+
+async function errorWith (request, status, code, retryAfter) {
+  const response = await request;
+  const value = await response.json();
+  assert.equal(response.status, status, JSON.stringify(value));
+  assert.equal(value.code, code);
+  assert.deepEqual(Object.keys(value).sort(), retryAfter === undefined ? ['code', 'requestId'] : ['code', 'requestId', 'retryAfter']);
+  if (retryAfter !== undefined) assert.equal(value.retryAfter, retryAfter);
+}
+
+const settleRequests = () => new Promise(resolve => setTimeout(resolve, 50));
+
+test('GitHub API routes are off by default and fail closed on an unknown group', async t => {
+  for (const [githubApi, status, code] of [[null, 404, 'GITHUB_API_UNAVAILABLE'], ['', 404, 'GITHUB_API_UNAVAILABLE'],
+    ['pulls-read,pulls-write', 500, 'GITHUB_API_MISCONFIGURED'], ['pulls-read,pulls-read', 500, 'GITHUB_API_MISCONFIGURED']]) {
+    const {api, graphql, apiCalls, upstream} = await startApi(t, {githubApi});
+    const lookups = upstream.calls.length;
+    await errorWith(api('/pulls'), status, code);
+    await errorWith(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId()), status, code);
+    await errorWith(api('/anything'), status, code);
+    assert.equal(apiCalls(), 0);
+    assert.equal(upstream.calls.length, lookups);
+  }
+});
+
+test('GitHub API routes reject other methods, paths, queries and bodies before contacting GitHub', async t => {
+  const {api, graphql, createReview, apiCalls, upstream, service, session} = await startApi(t);
+  const lookups = upstream.calls.length;
+  const bad = [
+    api('/pulls', {method: 'DELETE'}), api('/pulls?page=0'), api('/pulls?page=51'), api('/pulls?page=1&page=2'),
+    api('/pulls?page=01'), api('/pulls?state=open'), api('/pulls/7?page=1'), api('/pulls/07'), api('/pulls/2147483648'),
+    api('/pulls/7/reviews?page=11'), api('/pulls/7/files'), api('/issues'), api('/graphql/pullRequestReviewContext'),
+    call(service, session, '/v1/github/owner/project.git/pulls'), call(service, session, '/v1/github/owner/%2e%2e/pulls'),
+    graphql('deleteRepository', {number: 7}, submitId()),
+    graphql('pullRequestReviewContext', {number: 7, query: '{ viewer { login } }'}),
+    graphql('pullRequestReviewContext', {number: '7'}),
+    graphql('pullRequestReviewContext', {number: 7, pullRequestId: 'PR_node'}),
+    graphql('addPullRequestReview', {number: 7, commitOid: head.toUpperCase()}, submitId()),
+    graphql('addPullRequestReview', {number: 7, commitOid: head}),
+    graphql('addPullRequestReview', {number: 7, commitOid: head}, 'not-a-uuid'),
+    graphql('addPullRequestReviewThread', {number: 7, threadIndex: 50, path: projectFile, body: 'x'}, submitId()),
+    graphql('addPullRequestReviewThread', {number: 7, threadIndex: 0, path: 'game/sprite.json', body: 'x'}, submitId()),
+    graphql('addPullRequestReviewThread', {number: 7, threadIndex: 0, path: '../project.source.json', body: 'x'}, submitId()),
+    graphql('addPullRequestReviewThread', {number: 7, threadIndex: 0, path: '/project.source.json', body: 'x'}, submitId()),
+    graphql('addPullRequestReviewThread', {number: 7, threadIndex: 0, path: projectFile, body: ''}, submitId()),
+    graphql('addPullRequestReviewThread', {number: 7, threadIndex: 0, path: projectFile, body: 'x'.repeat(65_537)},
+      submitId()),
+    graphql('submitPullRequestReview', {number: 7, threadCount: 0, event: 'COMMENT', body: ''}, submitId()),
+    graphql('submitPullRequestReview', {number: 7, threadCount: 1, event: 'DISMISS', body: 'x'}, submitId()),
+    graphql('submitPullRequestReview', {number: 7, threadCount: 1, event: 'REQUEST_CHANGES', body: ''}, submitId()),
+    graphql('deletePullRequestReview', {number: 7, reviewId: 'PRR_1'}, submitId()),
+    api('/graphql/pullRequestReviewContext', {method: 'POST', body: '[7]', headers: {'Content-Type': 'application/json'}}),
+    api('/graphql/pullRequestReviewContext', {method: 'POST', body: '{"number":7}', headers: {'Content-Type': 'text/plain'}}),
+    api('/pulls', {headers: {'Review-Submit-Id': submitId()}}),
+    createReview({commit_id: head, event: 'COMMENT', body: 'x', comments: []}),
+    createReview({commit_id: head, event: 'COMMENT'}),
+    createReview({commit_id: head, event: '', body: 'x'}),
+    api('/pulls/7/reviews', {method: 'POST', body: JSON.stringify({commit_id: head, event: 'APPROVE'}),
+      headers: {'Content-Type': 'application/json'}})
+  ];
+  for (const [index, response] of bad.entries()) {
+    await errorWith(response, 400, 'BAD_REQUEST').catch(error => assert.fail('Request ' + index + ': ' + error.message));
+  }
+  const length = await new Promise((resolve, reject) => {
+    httpRequest(service.connection.proxyOrigin + apiRoot + '/graphql/pullRequestReviewContext', {method: 'POST', headers: {
+      Origin: EDITOR_ORIGIN, Authorization: 'Bearer ' + session.bearer, 'Content-Type': 'application/json',
+      'Content-Length': 256 * 1024 + 1
+    }}, res => {
+      res.resume();
+      resolve(res.statusCode);
+    }).on('error', reject).end();
+  });
+  assert.equal(length, 413);
+  await errorWith(api('/graphql/pullRequestReviewContext', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: new ReadableStream({start (controller) {
+      controller.enqueue(new TextEncoder().encode('{"number":7}'));
+      controller.close();
+    }}), duplex: 'half'}), 411, 'LENGTH_REQUIRED');
+
+  const preflight = (path, method, headers) => call(service, null, apiRoot + path, {method: 'OPTIONS', headers: {
+    'Access-Control-Request-Method': method, 'Access-Control-Request-Headers': headers
+  }});
+  const allowed = await preflight('/graphql/addPullRequestReview', 'POST', 'authorization, content-type, review-submit-id');
+  assert.equal(allowed.status, 204);
+  assert.equal(allowed.headers.get('access-control-allow-headers'), 'authorization, content-type, review-submit-id');
+  assert.equal((await preflight('/pulls', 'GET', 'authorization')).status, 204);
+  await errorWith(preflight('/pulls', 'GET', 'authorization, review-submit-id'), 403, 'FORBIDDEN');
+  await errorWith(preflight('/pulls', 'POST', 'authorization'), 400, 'BAD_REQUEST');
+  await errorWith(preflight('/graphql/addPullRequestReview', 'POST', 'authorization, cookie'), 403, 'FORBIDDEN');
+  assert.equal(apiCalls(), 0);
+  assert.equal(upstream.calls.length, lookups);
+});
+
+test('GitHub API routes check origin, host, bearer, session, repository and the review grant', async t => {
+  const {api, graphql, createReview, apiCalls, upstream, service, session} = await startApi(t, {review: false});
+  await errorWith(api('/pulls', {headers: {Origin: 'https://editor.invalid'}}), 403, 'FORBIDDEN');
+  await errorWith(api('/pulls', {headers: {Origin: 'null'}}), 403, 'FORBIDDEN');
+  await errorWith(api('/pulls', {session: null}), 401, 'SESSION_REQUIRED');
+  await errorWith(api('/pulls', {session: null, headers: {Authorization: 'Bearer ' + 'x'.repeat(43)}}), 401, 'SESSION_REQUIRED');
+  const host = await new Promise((resolve, reject) => {
+    httpRequest(service.connection.proxyOrigin + apiRoot + '/pulls', {headers: {
+      Host: 'rebinding.invalid', Origin: EDITOR_ORIGIN, Authorization: 'Bearer ' + session.bearer
+    }}, res => {
+      res.resume();
+      resolve(res.statusCode);
+    }).on('error', reject).end();
+  });
+  assert.equal(host, 403);
+  await errorWith(call(service, session, '/v1/github/owner/other/pulls'), 403, 'FORBIDDEN');
+  // A session without the review grant reads but cannot send.
+  await errorWith(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId()), 403, 'FORBIDDEN');
+  await errorWith(graphql('deletePullRequestReview', {number: 7}, submitId()), 403, 'FORBIDDEN');
+  await errorWith(createReview({commit_id: head, event: 'COMMENT', body: 'x'}), 403, 'FORBIDDEN');
+  assert.equal(apiCalls(), 0);
+  await ok(graphql('pullRequestReviewContext', {number: 7}));
+  await ok(api('/pulls'));
+  assert.equal(apiCalls(), 2);
+
+  // Another repository ID behind the same name, expiry and disconnect stop requests before GitHub.
+  upstream.repositories.get('/repos/owner/project').id = 4;
+  await errorWith(api('/pulls'), 403, 'FORBIDDEN');
+  upstream.repositories.get('/repos/owner/project').id = 1;
+  await assert.rejects(service.createSession(desktopRemote, false, 'yes'), {code: 'BAD_REQUEST'});
+  upstream.advance(5 * 60_000);
+  await errorWith(api('/pulls'), 401, 'SESSION_EXPIRED');
+  const latest = await service.createSession(desktopRemote, false, true);
+  await service.disconnect();
+  await errorWith(call(service, latest, apiRoot + '/pulls'), 401, 'SESSION_REQUIRED');
+  assert.equal(apiCalls(), 2);
+});
+
+test('GitHub API reads send only the GitHub credential to canonical URLs and return the contracted fields', async t => {
+  const {api, graphql, github, upstream} = await startApi(t);
+  upstream.repositories.get('/repos/owner/project').full_name = 'Owner/Project';
+  const logged = [];
+  for (const method of ['log', 'info', 'warn', 'error', 'debug']) t.mock.method(console, method, (...args) => logged.push(args));
+  const list = await ok(api('/pulls?page=2', {headers: {Cookie: 'local=1', Referer: 'https://private.invalid'}}));
+  assert.deepEqual(list[0], {number: 7, title: 'Title 7', state: 'open', draft: false, merged_at: null,
+    updated_at: '2026-11-11T00:00:00Z', user: {login: 'author'}, head: {sha: head, ref: 'feature'},
+    base: {sha: 'b'.repeat(40), ref: 'main'}});
+  const listCall = github.calls.at(-1);
+  assert.equal(listCall.url,
+    'https://api.github.com/repos/Owner/Project/pulls?state=all&sort=updated&direction=desc&per_page=20&page=2');
+  assert.deepEqual(listCall.headers, {Authorization: 'Bearer ghu_one', Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'TurboWarp-Plus-Desktop-Git'});
+  assert.equal(listCall.redirect, 'manual');
+
+  upstream.repositories.get('/repos/owner/project').full_name = 'owner/project';
+  const pull = await ok(api('/pulls/7'));
+  assert.deepEqual(pull, {number: 7, title: 'Title 7', state: 'open', draft: false, merged_at: null, user: {login: 'author'},
+    body: 'markdown', body_text: 'plain', changed_files: 3, head: {sha: head, ref: 'feature', repo: null},
+    base: {sha: 'b'.repeat(40), ref: 'main', repo: {full_name: 'owner/project'}}});
+  assert.equal(github.calls.at(-1).headers.Accept, 'application/vnd.github.text+json');
+  await errorWith(api('/pulls/8'), 404, 'PULL_REQUEST_NOT_FOUND');
+  assert.deepEqual(await ok(api('/pulls/7/reviews')), []);
+
+  const context = await ok(graphql('pullRequestReviewContext', {number: 7}));
+  assert.deepEqual(context, {headRefOid: head, viewer: 'reviewer', pendingReview: null, reviews: []});
+  const contextCall = github.calls.at(-1);
+  assert.equal(contextCall.url, 'https://api.github.com/graphql');
+  assert.deepEqual(contextCall.body.variables, {owner: 'owner', name: 'project', number: 7});
+  assert.deepEqual(Object.keys(contextCall.headers).sort(), ['Accept', 'Authorization', 'Content-Type', 'User-Agent']);
+  await errorWith(graphql('pullRequestReviewContext', {number: 8}), 404, 'PULL_REQUEST_NOT_FOUND');
+
+  // Over-limit, non-JSON and mis-shaped upstream bodies, redirects and list 404s.
+  github.faults.push({operation: 'rest', response: () => new Response('x'.repeat(1024 * 1024 + 1),
+    {headers: {'Content-Type': 'application/json'}})});
+  await errorWith(api('/pulls'), 502, 'UPSTREAM_FAILURE');
+  github.faults.push({operation: 'rest', response: () => new Response('<html>', {headers: {'Content-Type': 'text/html'}})});
+  await errorWith(api('/pulls/7'), 502, 'UPSTREAM_FAILURE');
+  github.faults.push({operation: 'rest', response: () => Response.json([{number: '7'}])});
+  await errorWith(api('/pulls'), 502, 'UPSTREAM_FAILURE');
+  github.faults.push({operation: 'rest', response: () => new Response(null, {status: 404})});
+  await errorWith(api('/pulls'), 403, 'FORBIDDEN');
+  github.faults.push({operation: 'rest', response: () => new Response(null, {status: 302,
+    headers: {Location: 'https://evil.invalid/repos/owner/project/pulls'}})});
+  await errorWith(api('/pulls'), 409, 'REDIRECT_REJECTED');
+  github.faults.push({operation: 'pullRequestReviewContext', response: () => new Response(null, {status: 301,
+    headers: {Location: 'https://evil.invalid/graphql'}})});
+  await errorWith(graphql('pullRequestReviewContext', {number: 7}), 409, 'REDIRECT_REJECTED');
+  assert.equal(github.calls.filter(call => call.url.includes('evil.invalid')).length, 0);
+  assert.ok(upstream.calls.every(call => !call.url.includes('ghu_')));
+  assert.deepEqual(logged, []);
+});
+
+test('a review goes out in steps under one Review-Submit-Id and rejects other step orders', async t => {
+  const {graphql, github} = await startApi(t);
+  const id = submitId(1);
+  const thread = (index, options) => graphql('addPullRequestReviewThread',
+    {number: 7, threadIndex: index, path: projectFile, body: 'Comment ' + index}, id, options);
+  await errorWith(thread(0), 409, 'REVIEW_STEP_CONFLICT');
+  assert.deepEqual(await ok(graphql('addPullRequestReview', {number: 7, commitOid: head}, id)),
+    {state: 'PENDING', commitOid: head});
+  await errorWith(graphql('addPullRequestReview', {number: 7, commitOid: head}, id), 409, 'REVIEW_DUPLICATE');
+  await errorWith(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId(2)), 409, 'REVIEW_STEP_CONFLICT');
+  await errorWith(thread(1), 409, 'REVIEW_STEP_CONFLICT');
+  assert.deepEqual(await ok(thread(0)), {threads: 1});
+  await errorWith(thread(0), 409, 'REVIEW_DUPLICATE');
+  assert.deepEqual(await ok(thread(1)), {threads: 2});
+  await errorWith(graphql('addPullRequestReviewThread', {number: 8, threadIndex: 2, path: projectFile, body: 'x'}, id),
+    409, 'REVIEW_STEP_CONFLICT');
+  await errorWith(graphql('submitPullRequestReview', {number: 7, threadCount: 1, event: 'COMMENT', body: ''}, id),
+    409, 'REVIEW_STEP_CONFLICT');
+  await errorWith(graphql('submitPullRequestReview', {number: 7, threadCount: 2, event: 'COMMENT', body: ''}, submitId(3)),
+    409, 'REVIEW_STEP_CONFLICT');
+  const context = await ok(graphql('pullRequestReviewContext', {number: 7}, id));
+  assert.deepEqual(context.pendingReview, {ours: true, commitOid: head, createdAt: '2026-11-11T00:00:00Z'});
+  assert.deepEqual(context.submit, {state: 'pending', threads: 2});
+  const published = await ok(graphql('submitPullRequestReview', {number: 7, threadCount: 2, event: 'APPROVE', body: 'Good'}, id));
+  assert.equal(published.state, 'APPROVED');
+  assert.equal(published.commitOid, head);
+  assert.match(published.url, /^https:\/\/github\.com\/owner\/project\/pull\/7#pullrequestreview-/u);
+  assert.deepEqual(Object.keys(published).sort(), ['commitOid', 'state', 'submittedAt', 'url']);
+  await errorWith(graphql('submitPullRequestReview', {number: 7, threadCount: 2, event: 'APPROVE', body: 'Good'}, id),
+    409, 'REVIEW_DUPLICATE');
+  await errorWith(graphql('deletePullRequestReview', {number: 7}, id), 409, 'REVIEW_STEP_CONFLICT');
+  const after = await ok(graphql('pullRequestReviewContext', {number: 7}, id));
+  assert.deepEqual(after.submit, {state: 'submitted', threads: 2});
+  assert.deepEqual(after.reviews, [{state: 'APPROVED', commitOid: head, submittedAt: '2026-11-11T01:00:00Z', ours: true}]);
+  assert.deepEqual(github.mutations, ['addPullRequestReview', 'addPullRequestReviewThread', 'addPullRequestReviewThread',
+    'submitPullRequestReview']);
+  const variables = github.calls.filter(call => call.operation !== 'pullRequestReviewContext').map(call => call.body.variables);
+  assert.deepEqual(variables, [
+    {pullRequestId: 'PR_node', commitOid: head},
+    {reviewId: 'PRR_1', path: projectFile, body: 'Comment 0'},
+    {reviewId: 'PRR_1', path: projectFile, body: 'Comment 1'},
+    {reviewId: 'PRR_1', event: 'APPROVE', body: 'Good'}
+  ]);
+
+  // A later submission can start, and a pending review can be discarded only while it is pending.
+  const next = submitId(4);
+  await ok(graphql('addPullRequestReview', {number: 7, commitOid: head}, next));
+  assert.deepEqual(await ok(graphql('deletePullRequestReview', {number: 7}, next)), {deleted: true});
+  await errorWith(graphql('deletePullRequestReview', {number: 7}, next), 409, 'REVIEW_DUPLICATE');
+  assert.equal(github.pending, null);
+});
+
+test('the same step arriving twice at once reaches GitHub once', {timeout: 10_000}, async t => {
+  const {graphql, github} = await startApi(t);
+  const id = submitId(1);
+  const steps = [
+    ['addPullRequestReview', {number: 7, commitOid: head}],
+    ['addPullRequestReviewThread', {number: 7, threadIndex: 0, path: projectFile, body: 'x'}],
+    ['submitPullRequestReview', {number: 7, threadCount: 1, event: 'COMMENT', body: ''}]
+  ];
+  for (const [operation, variables] of steps) {
+    const entered = Promise.withResolvers();
+    const gate = Promise.withResolvers();
+    github.faults.push({operation, apply: true, entered, gate: gate.promise});
+    const first = graphql(operation, variables, id);
+    await entered.promise;
+    await errorWith(graphql(operation, variables, id), 409, 'REVIEW_DUPLICATE');
+    gate.resolve();
+    await ok(first);
+  }
+  assert.deepEqual(github.mutations, ['addPullRequestReview', 'addPullRequestReviewThread', 'submitPullRequestReview']);
+});
+
+test('a step resent after the Editor dropped the connection before the response reaches GitHub once', {timeout: 10_000},
+  async t => {
+    const {graphql, github} = await startApi(t);
+    const id = submitId(1);
+    const steps = [
+      ['addPullRequestReview', {number: 7, commitOid: head}, 'pending'],
+      ['addPullRequestReviewThread', {number: 7, threadIndex: 0, path: projectFile, body: 'x'}, 'pending'],
+      ['submitPullRequestReview', {number: 7, threadCount: 1, event: 'COMMENT', body: ''}, 'submitted']
+    ];
+    for (const [operation, variables, state] of steps) {
+      const entered = Promise.withResolvers();
+      const gate = Promise.withResolvers();
+      github.faults.push({operation, apply: true, entered, gate: gate.promise});
+      const controller = new AbortController();
+      const dropped = graphql(operation, variables, id, {signal: controller.signal});
+      await entered.promise;
+      controller.abort();
+      await assert.rejects(dropped, {name: 'AbortError'});
+      gate.resolve();
+      await settleRequests();
+      await errorWith(graphql(operation, variables, id), 409, 'REVIEW_DUPLICATE');
+      // The step ran to its end, so the record already holds its outcome.
+      assert.equal((await ok(graphql('pullRequestReviewContext', {number: 7}, id))).submit.state, state);
+    }
+    assert.deepEqual(github.mutations, ['addPullRequestReview', 'addPullRequestReviewThread', 'submitPullRequestReview']);
+  });
+
+test('a pending review of the viewer stops the start step before the mutation', async t => {
+  const {graphql, github} = await startApi(t);
+  github.pending = {id: 'PRR_mine', commitOid: head, body: 'draft on github.com', threads: []};
+  await errorWith(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId(1)), 409, 'PENDING_REVIEW_EXISTS');
+  assert.deepEqual(github.mutations, []);
+  await errorWith(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId(1)), 409, 'REVIEW_DUPLICATE');
+  const context = await ok(graphql('pullRequestReviewContext', {number: 7}, submitId(1)));
+  assert.deepEqual(context.submit, {state: 'closed', threads: 0});
+  assert.deepEqual(context.pendingReview, {ours: false, commitOid: head, createdAt: '2026-11-11T00:00:00Z'});
+  github.pending = null;
+  await ok(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId(2)));
+  assert.deepEqual(github.mutations, ['addPullRequestReview']);
+});
+
+test('the review context resolves an unknown outcome as published, pending or absent', async t => {
+  const {graphql, github} = await startApi(t);
+  const lost = () => Promise.reject(new TypeError('connection lost'));
+
+  // Start applied, answer lost: the pending review on the recorded commit is the submission's.
+  github.faults.push({operation: 'addPullRequestReview', apply: true, response: () => new Response(null, {status: 502})});
+  await errorWith(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId(1)), 502, 'UPSTREAM_FAILURE');
+  await errorWith(graphql('addPullRequestReviewThread', {number: 7, threadIndex: 0, path: projectFile, body: 'x'},
+    submitId(1)), 409, 'REVIEW_STEP_CONFLICT');
+  let context = await ok(graphql('pullRequestReviewContext', {number: 7}, submitId(1)));
+  assert.deepEqual(context.submit, {state: 'pending', threads: 0});
+  assert.equal(context.pendingReview.ours, true);
+  await ok(graphql('addPullRequestReviewThread', {number: 7, threadIndex: 0, path: projectFile, body: 'x'}, submitId(1)));
+
+  // Submit applied, connection lost: published.
+  github.faults.push({operation: 'submitPullRequestReview', apply: true, response: lost});
+  await errorWith(graphql('submitPullRequestReview', {number: 7, threadCount: 1, event: 'COMMENT', body: ''}, submitId(1)),
+    502, 'UPSTREAM_FAILURE');
+  context = await ok(graphql('pullRequestReviewContext', {number: 7}, submitId(1)));
+  assert.deepEqual(context.submit, {state: 'submitted', threads: 1});
+  assert.equal(context.reviews[0].ours, true);
+
+  // Start not applied, connection lost: absent.
+  github.faults.push({operation: 'addPullRequestReview', response: lost});
+  await errorWith(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId(2)), 502, 'UPSTREAM_FAILURE');
+  context = await ok(graphql('pullRequestReviewContext', {number: 7}, submitId(2)));
+  assert.deepEqual(context.submit, {state: 'closed', threads: 0});
+  assert.equal(context.pendingReview, null);
+
+  // Submit not applied, gateway timeout: still pending, and it can be sent again or discarded.
+  await ok(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId(3)));
+  github.faults.push({operation: 'submitPullRequestReview', response: () => new Response(null, {status: 504})});
+  await errorWith(graphql('submitPullRequestReview', {number: 7, threadCount: 0, event: 'APPROVE', body: ''}, submitId(3)),
+    504, 'UPSTREAM_TIMEOUT');
+  await errorWith(graphql('submitPullRequestReview', {number: 7, threadCount: 0, event: 'APPROVE', body: ''}, submitId(3)),
+    409, 'REVIEW_DUPLICATE');
+  await errorWith(graphql('deletePullRequestReview', {number: 7}, submitId(3)), 409, 'REVIEW_STEP_CONFLICT');
+  context = await ok(graphql('pullRequestReviewContext', {number: 7}, submitId(3)));
+  assert.deepEqual(context.submit, {state: 'pending', threads: 0});
+  assert.equal(context.pendingReview.ours, true);
+  await ok(graphql('deletePullRequestReview', {number: 7}, submitId(3)));
+  assert.deepEqual(github.mutations, ['addPullRequestReview', 'addPullRequestReviewThread', 'submitPullRequestReview',
+    'addPullRequestReview', 'deletePullRequestReview']);
+
+  // A rejected thread leaves the record broken; only a discard follows.
+  await ok(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId(5)));
+  github.faults.push({operation: 'addPullRequestReviewThread',
+    response: () => Response.json({data: null, errors: [{type: 'UNPROCESSABLE', message: 'secret'}]})});
+  await errorWith(graphql('addPullRequestReviewThread', {number: 7, threadIndex: 0, path: projectFile, body: 'x'},
+    submitId(5)), 422, 'REVIEW_THREAD_REJECTED');
+  await errorWith(graphql('addPullRequestReviewThread', {number: 7, threadIndex: 0, path: projectFile, body: 'x'},
+    submitId(5)), 409, 'REVIEW_DUPLICATE');
+  assert.deepEqual(await ok(graphql('deletePullRequestReview', {number: 7}, submitId(5))), {deleted: true});
+});
+
+test('GitHub rate limits become 429 RATE_LIMITED with retryAfter, apart from missing permissions', async t => {
+  const {api, graphql, createReview, github, upstream} = await startApi(t);
+  const reset = Math.floor(upstream.now() / 1000) + 30;
+  github.faults.push({operation: 'rest', response: () => new Response(null, {status: 429, headers: {'Retry-After': '7'}})});
+  await errorWith(api('/pulls'), 429, 'RATE_LIMITED', 7);
+  github.faults.push({operation: 'rest', response: () => new Response(null, {status: 403, headers: {
+    'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset)
+  }})});
+  await errorWith(api('/pulls/7'), 429, 'RATE_LIMITED', 30);
+  github.faults.push({operation: 'rest', response: () => new Response(null, {status: 403})});
+  await errorWith(api('/pulls/7'), 403, 'FORBIDDEN');
+  github.faults.push({operation: 'createReview', response: () => new Response(null, {status: 403, headers: {'Retry-After': '5'}})});
+  await errorWith(createReview({commit_id: head, event: 'COMMENT', body: 'x'}), 429, 'RATE_LIMITED', 5);
+
+  github.faults.push({operation: 'pullRequestReviewContext', response: () => Response.json(
+    {data: null, errors: [{type: 'SOMETHING'}]}, {headers: {'x-ratelimit-remaining': '0'}})});
+  await errorWith(graphql('pullRequestReviewContext', {number: 7}), 429, 'RATE_LIMITED', 60);
+  github.faults.push({operation: 'addPullRequestReview', response: () => Response.json(
+    {data: null, errors: [{type: 'RATE_LIMITED'}]}, {headers: {'Retry-After': '11'}})});
+  await errorWith(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId(2)), 429, 'RATE_LIMITED', 11);
+  github.faults.push({operation: 'pullRequestReviewContext', response: () => Response.json(
+    {data: null, errors: [{type: 'FORBIDDEN'}]})});
+  await errorWith(graphql('pullRequestReviewContext', {number: 7}), 403, 'FORBIDDEN');
+  github.faults.push({operation: 'pullRequestReviewContext', response: () => new Response(null, {status: 401})});
+  await errorWith(graphql('pullRequestReviewContext', {number: 7}), 403, 'FORBIDDEN');
+  // A well-formed success that used the last point is a success.
+  github.graphqlHeaders = {'x-ratelimit-remaining': '0'};
+  await ok(graphql('pullRequestReviewContext', {number: 7}));
+  github.graphqlHeaders = {};
+  // A rate-limited repository lookup.
+  upstream.lookups.push(() => new Response(null, {status: 403, headers: {'x-ratelimit-remaining': '0', 'Retry-After': '9'}}));
+  await errorWith(api('/pulls'), 429, 'RATE_LIMITED', 9);
+  assert.deepEqual(github.mutations, []);
+});
+
+test('turning off review-threads alone leaves the review body routes working', async t => {
+  const {api, graphql, createReview, github} = await startApi(t, {githubApi: 'pulls-read,reviews-body'});
+  await errorWith(graphql('pullRequestReviewContext', {number: 7}), 404, 'GITHUB_API_UNAVAILABLE');
+  await errorWith(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId(1)), 404, 'GITHUB_API_UNAVAILABLE');
+  assert.equal(github.calls.length, 0);
+  await ok(api('/pulls'));
+  const created = await ok(createReview({commit_id: head, event: 'COMMENT', body: 'Overall'}));
+  assert.deepEqual(Object.keys(created).sort(), ['commit_id', 'html_url', 'id', 'state', 'submitted_at']);
+  assert.equal(created.state, 'COMMENTED');
+  assert.deepEqual(github.calls.at(-1).body, {commit_id: head, event: 'COMMENT', body: 'Overall'});
+  await errorWith(createReview({commit_id: head, event: 'COMMENT', body: 'Overall'}), 409, 'REVIEW_DUPLICATE');
+  const reviews = await ok(api('/pulls/7/reviews?page=1'));
+  assert.deepEqual(reviews, [{id: created.id, user: {login: 'reviewer'}, commit_id: head, state: 'COMMENTED',
+    submitted_at: '2026-11-11T01:00:00Z', body: 'Overall'}]);
+  github.faults.push({operation: 'createReview', response: () => Response.json({message: 'secret'}, {status: 422})});
+  await errorWith(createReview({commit_id: head, event: 'APPROVE'}, submitId(2)), 422, 'REVIEW_REJECTED');
+  await errorWith(createReview({commit_id: head, event: 'APPROVE'}, submitId(2)), 409, 'REVIEW_DUPLICATE');
+  // The duplicates never left the proxy; the rejected review did and was not applied.
+  assert.equal(github.calls.filter(call => call.operation === 'createReview').length, 2);
+  assert.deepEqual(github.mutations, ['createReview']);
+
+  const {api: reads} = await startApi(t, {githubApi: 'review-threads'});
+  await errorWith(reads('/pulls'), 404, 'GITHUB_API_UNAVAILABLE');
+  await errorWith(reads('/pulls/7/reviews'), 404, 'GITHUB_API_UNAVAILABLE');
+});
+
+test('review submit records are limited per session and dropped with it', {timeout: 20_000}, async t => {
+  const {graphql, createReview, service, github} = await startApi(t);
+  github.faults.push(...Array.from({length: 256}, () => ({operation: 'createReview',
+    response: () => new Response(null, {status: 500})})));
+  for (let index = 1; index <= 255; index++) {
+    await errorWith(createReview({commit_id: head, event: 'APPROVE'}, submitId(index)), 502, 'UPSTREAM_FAILURE');
+  }
+  await ok(graphql('addPullRequestReview', {number: 7, commitOid: head}, submitId(256)));
+  await errorWith(createReview({commit_id: head, event: 'APPROVE'}, submitId(257)), 429, 'RATE_LIMITED');
+  await errorWith(graphql('addPullRequestReview', {number: 8, commitOid: head}, submitId(258)), 429, 'RATE_LIMITED');
+  // The record still answers its own steps.
+  await ok(graphql('deletePullRequestReview', {number: 7}, submitId(256)));
+  const replaced = await service.createSession(desktopRemote, false, true);
+  github.faults.length = 0;
+  await ok(call(service, replaced, apiRoot + '/graphql/addPullRequestReview', {method: 'POST',
+    headers: {'Content-Type': 'application/json', 'Review-Submit-Id': submitId(256)},
+    body: JSON.stringify({number: 7, commitOid: head})}));
+});
+
+test('an in-flight review step older than 60 seconds reads as unknown', () => {
+  const records = reviewRecords.createReviewRecords();
+  const id = submitId(1);
+  let now = 0;
+  const start = reviewRecords.reserveStep(records, {id, step: 'start', number: 7, commitOid: head}, 1, now);
+  assert.equal(start.state, 'starting');
+  assert.throws(() => reviewRecords.reserveStep(records, {id: submitId(2), step: 'start', number: 7, commitOid: head}, 1, now),
+    {code: 'REVIEW_STEP_CONFLICT'});
+  now = 60_000;
+  const context = reviewRecords.reserveStep(records, {id, step: 'context', number: 7}, 1, now);
+  assert.equal(context.state, 'start-unknown');
+  // A late result of the expired attempt does not apply.
+  assert.throws(() => reviewRecords.applyResult(records, id, start.attempt, 'ok',
+    {pullRequestNodeId: 'PR_node', reviewNodeId: 'PRR_1'}, now), {code: 'REVIEW_STEP_CONFLICT'});
+  reviewRecords.applyResult(records, id, context.attempt, 'pending', {pullRequestNodeId: 'PR_node', reviewNodeId: 'PRR_1'}, now);
+  const thread = reviewRecords.reserveStep(records, {id, step: 'thread', number: 7, threadIndex: 0}, 1, now);
+  assert.equal(thread.state, 'threading');
+  now += 60_000;
+  assert.throws(() => reviewRecords.reserveStep(records, {id, step: 'thread', number: 7, threadIndex: 0}, 1, now),
+    {code: 'REVIEW_DUPLICATE'});
+  assert.equal(reviewRecords.reserveStep(records, {id, step: 'delete', number: 7}, 1, now).resume, 'broken');
+  assert.throws(() => reviewRecords.reserveStep(records, {id, step: 'context', number: 7}, 2, now),
+    {code: 'REVIEW_STEP_CONFLICT'});
+  reviewRecords.clearReviewRecords(records);
+  assert.throws(() => reviewRecords.reserveStep(records, {id, step: 'context', number: 7}, 1, now),
+    {code: 'REVIEW_STEP_CONFLICT'});
+});
+
+test('the authorize handler passes the review grant through', async () => {
+  const {EventEmitter} = require('node:events');
+  const {installEditorGit} = require('../src-main/local-git/editor-ipc');
+  const ipc = new EventEmitter();
+  const handlers = new Map();
+  ipc.handle = (name, handler) => handlers.set(name, handler);
+  const contents = new EventEmitter();
+  contents.mainFrame = {url: 'tw-editor://./plus-gui/gui.html'};
+  installEditorGit(ipc, contents, {clientId: 'Iv1_test', store: {}, githubApi: allGroups});
+  const event = {sender: contents, senderFrame: contents.mainFrame};
+  assert.equal(await handlers.get('local-git-authorize')(event, desktopRemote, false, true), null);
+  const preload = require('node:fs').readFileSync(require.resolve('../src-preload/editor.js'), 'utf8');
+  assert.match(preload, /authorizeRepository: \(remote, write = false, review = false\) =>\s+ipcRenderer\.invoke\('local-git-authorize', remote, write, review\)/u);
 });
