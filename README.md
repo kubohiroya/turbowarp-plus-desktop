@@ -71,6 +71,20 @@ Desktop は device flow を使うので、必要なのは公開してよい clie
 
 push の `git-receive-pack` POST には `Git-Push-Id`（小文字の UUID v4）が必要です。上流への送信前に有効なセッションで ID を予約し、同じ ID が届いた場合は `409 PUSH_DUPLICATE` を返します。予約はセッションの寿命に合わせて保持されます。 [共通契約](https://github.com/kubohiroya/turbowarp-plus-editor/issues/316)
 
+PR の一覧・題名・本文の読み取りとレビューの送信には、ループバックプロキシの GitHub API 経路（`/v1/github/<owner>/<repo>/…`）を使います。既定では無効で、開発起動時に `TW_PLUS_DESKTOP_GIT_GITHUB_API` へ有効にする経路のまとまりをコンマ区切りで指定します。
+
+```sh
+TW_PLUS_DESKTOP_GIT_CLIENT_ID=<client ID> TW_PLUS_DESKTOP_GIT_GITHUB_API=pulls-read,review-threads,reviews-body npm run electron:start
+```
+
+- `pulls-read`: PR の一覧（`GET /pulls`）と1件（`GET /pulls/<n>`）
+- `review-threads`: 固定の5つの GraphQL 操作（`POST /graphql/<操作名>`）。`project.source.json` へのファイル単位のスレッドを付けたレビューを送ります
+- `reviews-body`: レビューの一覧（`GET /pulls/<n>/reviews`）と本文だけのレビューの送信（`POST /pulls/<n>/reviews`）。`review-threads` を切った環境での代わりの経路です
+
+無効のまとまりの経路は `404 GITHUB_API_UNAVAILABLE`、未知の値や重複した値を指定すると全経路が `500 GITHUB_API_MISCONFIGURED` になります。`review-threads` だけを外すと GraphQL の経路だけが止まり、Editor は本文だけの送信に切り替わります。Git Smart HTTP の経路は設定の影響を受けません。
+
+レビューの送信には、Editor が `authorizeRepository(remote, write, review)` の第3引数に `true` を渡して得た `review` 付きのセッションが必要です。GitHub のトークンとノード ID はメインプロセスに留め、Renderer には返しません。1回のレビューの送信は `Review-Submit-Id`（小文字の UUID v4）で表し、その手順の記録はセッションのメモリに `Git-Push-Id` とは別に合わせて 256 件まで持ち、切断・置換・期限切れで消します。経路・検証・応答・エラーの契約は Cloudflare 側と同じです。 [GitHub API routes](https://github.com/kubohiroya/hierarchidb/blob/main/packages/backend/bff/docs/git-smart-http.md#github-api-routes)（英語）
+
 ## 開発プロファイル
 
 macOS の既定の保存先は `~/Library/Application Support/TurboWarp Plus Desktop` です。個別の検証では `TW_PLUS_DESKTOP_DATA_DIR` に新しいディレクトリを指定できます。
