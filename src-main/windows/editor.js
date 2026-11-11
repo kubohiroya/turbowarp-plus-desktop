@@ -39,6 +39,8 @@ const rendererDirectory = plusRenderer ? 'plus-gui' : 'gui';
 const gitEnabled = plusRenderer && !projectProcess.worker;
 const gitClientIdOverride = process.env.TW_PLUS_DESKTOP_GIT_CLIENT_ID;
 const gitClientId = /^[A-Za-z0-9_]+$/u.test(gitClientIdOverride ?? '') ? gitClientIdOverride : undefined;
+// The GitHub API route groups of the loopback Git proxy, such as `pulls-read,review-threads,reviews-body`. Off by default.
+const gitGitHubApi = process.env.TW_PLUS_DESKTOP_GIT_GITHUB_API;
 const gitTokenPrompt = gitEnabled && gitPersonalAccessToken ? createPersonalTokenPrompt() : undefined;
 const credentialHelper = gitEnabled && gitCredentialHelper ? createGitCredentialHelper() : undefined;
 const gitStore = gitEnabled && (gitClientId || gitTokenPrompt || credentialHelper)
@@ -744,7 +746,7 @@ class EditorWindow extends ProjectRunningWindow {
     const editorURL = new URL(`tw-editor://./${rendererDirectory}/gui.html`);
     if (gitStore) {
       installEditorGit(this.ipc, this.window.webContents, {
-        clientId: gitClientId, store: gitStore, promptPersonalToken: gitTokenPrompt,
+        clientId: gitClientId, store: gitStore, githubApi: gitGitHubApi, promptPersonalToken: gitTokenPrompt,
         gitCredentialHelper: credentialHelper,
         confirmGitCredential: async ({owner, repo}, login, signal) => {
           const {response} = await dialog.showMessageBox(this.window, {

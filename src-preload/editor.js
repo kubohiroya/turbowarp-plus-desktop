@@ -6,7 +6,8 @@ const localGit = {
   begin: (remember = false) => ipcRenderer.invoke('local-git-begin', remember),
   finish: () => ipcRenderer.invoke('local-git-finish'),
   restore: () => ipcRenderer.invoke('local-git-restore'),
-  authorizeRepository: (remote, write = false) => ipcRenderer.invoke('local-git-authorize', remote, write),
+  authorizeRepository: (remote, write = false, review = false) =>
+    ipcRenderer.invoke('local-git-authorize', remote, write, review),
   getSession: () => ipcRenderer.invoke('local-git-session'),
   disconnect: () => ipcRenderer.invoke('local-git-disconnect')
 };

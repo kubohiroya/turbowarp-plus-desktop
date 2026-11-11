@@ -1,6 +1,7 @@
 const {randomBytes} = require('node:crypto');
 const {createGitHubAuth, GitServiceError} = require('./github-auth');
 const {parseRemote, startGitProxy} = require('./git-proxy');
+const {applyResult, clearReviewRecords, createReviewRecords, reserveReview, reserveStep} = require('./review-submits');
 
 const SESSION_MS = 5 * 60_000;
 const MAX_PUSH_IDS = 256;
@@ -11,7 +12,7 @@ const isPersonalToken = token => typeof token === 'string' && /^github_pat_[A-Za
 const sameRemote = (a, b) => a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase();
 
 async function startDesktopGit ({
-  clientId, request = fetch, now = Date.now, wait, store, promptPersonalToken, gitCredentialHelper, confirmGitCredential
+  clientId, githubApi, request = fetch, now = Date.now, wait, store, promptPersonalToken, gitCredentialHelper, confirmGitCredential
 } = {}) {
   const github = createGitHubAuth(clientId, {request, now, wait, store});
   let lifetime = new AbortController();
@@ -25,13 +26,20 @@ async function startDesktopGit ({
   function expired (selected) {
     if (selected.public.expiresAt > now()) return false;
     selected.pushIds.clear();
+    clearReviewRecords(selected.reviews);
     return true;
+  }
+
+  function end (selected) {
+    if (!selected) return;
+    selected.controller.abort();
+    clearReviewRecords(selected.reviews);
   }
 
   function reset () {
     lifetime.abort();
     lifetime = new AbortController();
-    session?.controller.abort();
+    end(session);
     session = null;
     github.disconnect();
     localToken = null;
@@ -39,8 +47,8 @@ async function startDesktopGit ({
     authOperation = null;
   }
 
-  async function repository (remote, write, accessToken, signal) {
-    const metadata = await github.repository(remote.owner, remote.repo, accessToken, signal).catch(error => {
+  async function repository (remote, write, accessToken, signal, rateLimit = false) {
+    const metadata = await github.repository(remote.owner, remote.repo, accessToken, signal, rateLimit).catch(error => {
       if (!signal.aborted && error.code === 'REAUTH_REQUIRED' && localToken?.accessToken === accessToken) {
         const {remembered} = localToken;
         localToken = null;
@@ -106,6 +114,8 @@ async function startDesktopGit ({
 
   const proxy = await startGitProxy({
     request,
+    now,
+    githubApi,
     async authorize (bearer, route, signal, pushId) {
       const selected = session;
       if (!selected || selected.public.bearer !== bearer) throw new GitServiceError(401, 'SESSION_REQUIRED');
@@ -137,6 +147,36 @@ async function startDesktopGit ({
       if (!target || selected !== session || selected?.repository.id !== current.id || target.id !== current.id) return null;
       selected.repository = target;
       return target;
+    },
+    // The GitHub API routes. Every request checks the session and the repository ID; a review submit ID or step is
+    // reserved after the last `await`, so the check and the state change cannot interleave with another request.
+    async authorizeGitHub (bearer, {owner, repo, operation, reviewId, submit}, signal) {
+      const selected = session;
+      if (!selected || selected.public.bearer !== bearer) throw new GitServiceError(401, 'SESSION_REQUIRED');
+      if (expired(selected)) throw new GitServiceError(401, 'SESSION_EXPIRED');
+      if (!sameRemote({owner, repo}, selected.remote) || (operation === 'review' && !selected.review)) {
+        throw new GitServiceError(403, 'FORBIDDEN');
+      }
+      const requestSignal = AbortSignal.any([signal, selected.controller.signal]);
+      const {accessToken} = await github.getCredentials();
+      requestSignal.throwIfAborted();
+      const verified = await repository(selected.repository, false, accessToken, requestSignal, true);
+      requestSignal.throwIfAborted();
+      if (selected !== session) throw new GitServiceError(401, 'SESSION_REQUIRED');
+      if (expired(selected)) throw new GitServiceError(401, 'SESSION_EXPIRED');
+      if (verified.id !== selected.repository.id) throw new GitServiceError(403, 'FORBIDDEN');
+      const grant = {accessToken, repository: verified, signal: selected.controller.signal};
+      if (reviewId) reserveReview(selected.reviews, reviewId);
+      if (!submit) return grant;
+      const record = reserveStep(selected.reviews, submit, verified.id, now());
+      return {
+        ...grant,
+        submit: {
+          state: record.state, commitOid: record.commitOid, threads: record.threads,
+          pullRequestNodeId: record.pullRequestNodeId, reviewNodeId: record.reviewNodeId
+        },
+        report: (outcome, ids) => applyResult(selected.reviews, submit.id, record.attempt, outcome, ids, now())
+      };
     }
   });
   const connection = Object.freeze({mode: 'desktop', proxyOrigin: proxy.proxyOrigin});
@@ -209,9 +249,10 @@ async function startDesktopGit ({
       });
     },
     getState,
-    async createSession (remoteUrl, write = false) {
+    // `review` adds the grant to send pull request reviews through the GitHub API routes.
+    async createSession (remoteUrl, write = false, review = false) {
       if (closed) throw new GitServiceError(401, 'SESSION_REQUIRED');
-      if (typeof write !== 'boolean') throw new GitServiceError(400, 'BAD_REQUEST');
+      if (typeof write !== 'boolean' || typeof review !== 'boolean') throw new GitServiceError(400, 'BAD_REQUEST');
       const remote = parseRemote(remoteUrl);
       const {signal} = lifetime;
       const ticket = ++revision;
@@ -229,8 +270,11 @@ async function startDesktopGit ({
         connection, account: Object.freeze({...account}),
         expiresAt: Math.min(expiresAt, now() + SESSION_MS), bearer: randomBytes(32).toString('base64url')
       });
-      session?.controller.abort();
-      session = {remote, write, repository: approved, controller: new AbortController(), public: publicSession, pushIds: new Set()};
+      end(session);
+      session = {
+        remote, write, review, repository: approved, controller: new AbortController(), public: publicSession,
+        pushIds: new Set(), reviews: createReviewRecords()
+      };
       return publicSession;
     },
     getSession () {

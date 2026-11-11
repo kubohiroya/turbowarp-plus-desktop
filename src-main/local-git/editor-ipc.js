@@ -6,7 +6,7 @@ const EDITOR_DOCUMENT = 'tw-editor://./plus-gui/gui.html';
 let active = null;
 
 function installEditorGit (ipc, webContents, {
-  clientId, store, promptPersonalToken, gitCredentialHelper, confirmGitCredential
+  clientId, store, githubApi, promptPersonalToken, gitCredentialHelper, confirmGitCredential
 }) {
   const methods = [];
   if (clientId) methods.push('github-app');
@@ -20,7 +20,9 @@ function installEditorGit (ipc, webContents, {
 
   async function getService (start) {
     if (!active && start) {
-      const service = startDesktopGit({clientId, store, promptPersonalToken, gitCredentialHelper, confirmGitCredential});
+      const service = startDesktopGit({
+        clientId, store, githubApi, promptPersonalToken, gitCredentialHelper, confirmGitCredential
+      });
       const lease = {owner: webContents, service};
       active = lease;
       service.catch(() => { if (active === lease) active = null; });
@@ -109,7 +111,8 @@ function installEditorGit (ipc, webContents, {
     return restored;
   });
   handle('finish', async () => (await getService(false))?.finish() ?? null);
-  handle('authorize', async (remote, write) => (await getService(false))?.createSession(remote, write) ?? null);
+  handle('authorize', async (remote, write, review) =>
+    (await getService(false))?.createSession(remote, write, review) ?? null);
   handle('session', async () => (await getService(false))?.getSession() ?? null);
   handle('disconnect', () => release(true));
 
