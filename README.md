@@ -37,7 +37,6 @@ Electron のウィンドウや macOS のクリップボードを使う検証は�
 | `npm run test:macos:local-git` | [ローカル Git パネルの書き込み](docs/local-git-panel.md) |
 | `npm run test:macos:project-process` | [作品分離と排他](docs/project-process-lock.md) |
 | `npm run test:macos:project-transfer` | [作品間転送](docs/project-json-transfer.md) |
-| `npm run test:macos:workspace-layout` | [作品ごとのレイアウト復元](docs/desktop-workspace-layout.md) |
 
 ## Plus Editor renderer の組み込み
 
