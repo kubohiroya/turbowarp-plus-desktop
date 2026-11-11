@@ -60,6 +60,23 @@ Plus editor の別窓を検証する場合は、[Desktop の権限境界](docs/d
 
 通常の Plus Editor 開発起動時に `TW_PLUS_DESKTOP_GIT_CLIENT_ID` へ device flow を有効にした GitHub App の公開 client ID を指定すると、Editor のトップフレームに `EditorPreload.localGit` が公開されます。認証後に選択リポジトリの許可を取得し、その短命セッションを Git Smart HTTP アダプターへ渡します。保存を選択した場合は OS の保護機能で暗号化し、保護機能が利用できない環境ではメモリ内で利用します。切断するとセッションと保存済みの資格情報を削除します。
 
+Renderer に渡すのは、接続先・アカウント・短命の Bearer・期限だけです。GitHub のトークンはメインプロセスから出しません。ループバックのプロキシは `127.0.0.1` で待ち受け、`Host`・`Origin: tw-editor://.`・Bearer・リポジトリ ID を要求のたびに確かめます。
+
+client ID は秘密の値ではなく、device flow は client secret を使いません。残るリスクはフィッシングです。第三者が同じ client ID で device flow を始め、利用者にそのコードを入れさせることができます。
+
+- Desktop は、自分で始めた device flow のコードだけを表示します。
+- App の権限は Metadata の read と Contents の read/write に限ります。
+- ユーザーアクセストークンには期限を付けます。
+- 利用者は、GitHub の Authorized GitHub Apps から許可を取り消せます。
+
+製品版では、次の順で対応する予定です（[#40](https://github.com/kubohiroya/turbowarp-plus-desktop/issues/40)）。
+
+1. 環境変数なしで接続できるよう、client ID を同梱する。
+2. fine-grained personal access token で接続できるようにする。
+3. 手元の Git の認証情報を、同意を得てから使えるようにする。
+
+それまでは、開発起動時の環境変数が必要です。
+
 push の `git-receive-pack` POST には `Git-Push-Id`（小文字の UUID v4）が必要です。上流への送信前に有効なセッションで ID を予約し、同じ ID が届いた場合は `409 PUSH_DUPLICATE` を返します。予約はセッションの寿命に合わせて保持されます。 [共通契約](https://github.com/kubohiroya/turbowarp-plus-editor/issues/316)
 
 ## 開発プロファイル
