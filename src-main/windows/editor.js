@@ -768,18 +768,24 @@ class EditorWindow extends ProjectRunningWindow {
             const ja = settings.locale?.startsWith('ja');
             const labels = ja ? {
               pr: 'PR の作成', merge: 'PR の作成とマージ', noChecks: 'CI チェックがない場合のマージを許可',
-              link: '関連 Issue', create: '新規 Issue', close: 'マージ後に Issue をクローズ'
+              link: '関連 Issue', create: '新規 Issue', close: 'マージ後に Issue をクローズ',
+              stack: '親 PR', stackBase: 'スタックの反映先',
+              stackMerge: '親と下位の PR がマージされた後、差分が一致し、新しい CI が通った場合にこの PR をマージ'
             } : {
               pr: 'Create pull request', merge: 'Create and merge pull request', noChecks: 'Allow merge without check runs',
-              link: 'Linked issue', create: 'New issue', close: 'Close issue after merge'
+              link: 'Linked issue', create: 'New issue', close: 'Close issue after merge',
+              stack: 'Parent PR', stackBase: 'Stack target branch',
+              stackMerge: 'Merge this PR after all lower PRs have merged, the diff matches and fresh CI passes'
             };
-            const {issue} = intent;
+            const {issue, stackParent} = intent;
             const {response} = await dialog.showMessageBox(this.window, {
               type: 'question', title: APP_NAME,
               message: labels[intent.goal],
               detail: [
                 login + ' → ' + intent.remote,
                 intent.head + ' (' + intent.commitOid + ') → ' + intent.base + ' (' + intent.baseOid + ')',
+                stackParent ? labels.stack + ' #' + stackParent.number + '\n' + labels.stackBase + ' ' + stackParent.targetBase : '',
+                stackParent && intent.goal === 'merge' ? labels.stackMerge : '',
                 intent.title, intent.body,
                 intent.allowNoChecks ? labels.noChecks : '',
                 issue ? ('number' in issue ? labels.link + ' #' + issue.number : labels.create + '\n' + issue.title + '\n' + issue.body) : '',

@@ -55,6 +55,10 @@ function fakeGitHub () {
       if (target.pathname === '/repos/fixture/work') return Response.json({
         id: 7, full_name: 'fixture/work', permissions: {pull: true, push: true}
       });
+      if (target.pathname === '/repos/fixture/work/pulls/11') return Response.json({
+        number: 11, state: 'open', head: {ref: 'parent', sha: baseOid, repo: {id: 7}},
+        base: {ref: 'main', sha: mergeOid, repo: {id: 7}}
+      });
       if (target.pathname === '/graphql') {
         assert.equal(method, 'POST');
         assert.deepEqual(JSON.parse(body).variables, {owner: 'fixture', name: 'work', number: 13});
@@ -129,6 +133,13 @@ test('Desktop publication advances a confirmed immutable PR after a scoped branc
   const publication = open();
   assert.deepEqual(await publication.repository(remote), {repositoryId: 7});
   await assert.rejects(publication.repository('https://github.com/fixture/other.git'), {code: 'FORBIDDEN'});
+  const withStacks = open([...all, 'stacks']);
+  const parent = {number: 11, head: 'parent', headOid: baseOid, targetBase: 'main'};
+  await assert.rejects(publication.stackParent(remote, 11), {code: 'FORBIDDEN'});
+  assert.deepEqual(await withStacks.stackParent(remote, 11), parent);
+  await assert.rejects(withStacks.enqueue({...intent, base: parent.head, stackParent: {...parent, targetBase: 'other'}}),
+    {code: 'PUBLICATION_CHANGED'});
+  assert.equal(prompts, 0);
   assert.equal(await publication.enqueue(intent), null);
   assert.equal(await publication.get(target), null);
   assert.equal((await publication.enqueue(intent)).status, 'queued');
@@ -180,4 +191,5 @@ test('publication capability setup and IPC allow only the configured Plus Editor
   ipc.emit('local-git-publication-enabled', child);
   assert.equal(child.returnValue, false);
   await assert.rejects(handles.get('local-git-publication-advance')(child, target), {message: 'GIT_UNAVAILABLE'});
+  await assert.rejects(handles.get('local-git-publication-stack-parent')(child, remote, 11), {message: 'GIT_UNAVAILABLE'});
 });

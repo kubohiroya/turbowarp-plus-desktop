@@ -3,7 +3,7 @@ const {createEncryptedGitJournal} = require('./repository-creation-journal');
 const {parseRemote} = require('./git-proxy');
 const {GitServiceError} = require('./github-auth');
 
-const featureNames = new Set(['pulls-read', 'pulls-write', 'issues-read', 'issues-write', 'checks-read', 'merge']);
+const featureNames = new Set(['pulls-read', 'pulls-write', 'issues-read', 'issues-write', 'checks-read', 'merge', 'stacks']);
 const jobIdPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u;
 const canonicalRemote = url => {
   const {owner, repo} = parseRemote(url);
@@ -16,12 +16,12 @@ function loadPublicationContract (developmentDirectory, packaged) {
   const override = packaged ? undefined : developmentDirectory;
   if (override && !path.isAbsolute(override)) return null;
   try {
-    const {createPullRequestQueue, validatePublicationIntent} = require(override ?
+    const {createPullRequestQueue, validatePublicationIntent, samePublicationStackParent} = require(override ?
       path.join(override, 'pull-request-queue.js') : '@kubohiroya/turbowarp-plus-editor-git/pull-request-queue');
     const {createGitHubPublicationHost} = require(override ?
       path.join(override, 'github-publication-host.js') : '@kubohiroya/turbowarp-plus-editor-git/github-publication-host');
     if ([createPullRequestQueue, validatePublicationIntent, createGitHubPublicationHost].every(fn => typeof fn === 'function')) {
-      return {createPullRequestQueue, validatePublicationIntent, createGitHubPublicationHost};
+      return {createPullRequestQueue, validatePublicationIntent, createGitHubPublicationHost, samePublicationStackParent};
     }
   } catch {
     return null;
@@ -55,6 +55,7 @@ function createPublicationJournal ({clientId, ...options}) {
 
 function requiredCapabilities (intent) {
   const needed = ['pulls-read', 'pulls-write'];
+  if (intent.stackParent) needed.push('stacks');
   if (intent.goal === 'merge') needed.push('checks-read', 'merge');
   if (intent.issue) {
     needed.push('issues-read');
@@ -73,6 +74,7 @@ function validateTarget (value) {
 /** Keeps the approved intent and repository grant in the privileged process. */
 function createDesktopPublication ({contract, journal, capabilities, authorize, confirm, request = fetch}) {
   const enabled = new Set(capabilities);
+  if (typeof contract?.samePublicationStackParent !== 'function') enabled.delete('stacks');
   async function context ({remote, repositoryId}) {
     const authorized = await authorize(remote, repositoryId);
     if (!authorized?.signal || authorized.repositoryId !== repositoryId ||
@@ -104,18 +106,27 @@ function createDesktopPublication ({contract, journal, capabilities, authorize, 
       }
     });
     const queue = contract.createPullRequestQueue({journal: queueJournal, repository: {remote, id: repositoryId}, port});
-    return {queue, authorized, awaitingPush: () => awaitingPush};
+    return {queue, port, authorized, awaitingPush: () => awaitingPush};
   }
 
   return {
-    capabilities: () => [...capabilities],
+    capabilities: () => [...enabled],
     async repository (remote) {
       const authorized = await authorize(canonicalRemote(remote));
       if (!authorized?.signal || !Number.isSafeInteger(authorized.repositoryId) || authorized.repositoryId < 1) throw denied();
       authorized.signal.throwIfAborted();
       return {repositoryId: authorized.repositoryId};
     },
+    async stackParent (remote, number) {
+      if (!enabled.has('stacks')) throw denied();
+      if (!Number.isSafeInteger(number) || number < 1) throw badRequest();
+      remote = canonicalRemote(remote);
+      const authorized = await authorize(remote);
+      const {port} = await context({remote, repositoryId: authorized?.repositoryId});
+      return await port.stackParent?.(number) ?? null;
+    },
     async enqueue (value) {
+      if (value?.stackParent !== undefined && !enabled.has('stacks')) throw denied();
       let intent;
       try {
         intent = contract.validatePublicationIntent(value);
@@ -126,7 +137,7 @@ function createDesktopPublication ({contract, journal, capabilities, authorize, 
       intent = {...intent, remote: target.remote};
       if (requiredCapabilities(intent).some(capability => !enabled.has(capability))) throw denied();
       if (!await journal.available()) throw new GitServiceError(503, 'STORAGE_FAILURE');
-      const {queue, authorized} = await context(target);
+      const {queue, port, authorized} = await context(target);
       const key = `confirm:${target.repositoryId}:${target.remote}:${target.id}`;
       return journal.exclusive(key, async () => {
         authorized.signal.throwIfAborted();
@@ -135,6 +146,9 @@ function createDesktopPublication ({contract, journal, capabilities, authorize, 
           if (JSON.stringify(existing.intent) !== JSON.stringify(intent)) throw new GitServiceError(409, 'PUBLICATION_CHANGED');
           return existing;
         }
+        if (intent.stackParent && !contract.samePublicationStackParent(
+          await port.stackParent(intent.stackParent.number), intent.stackParent
+        )) throw new GitServiceError(409, 'PUBLICATION_CHANGED');
         if (!await confirm(intent, authorized.account.login, authorized.signal)) return null;
         authorized.signal.throwIfAborted();
         return queue.enqueue(intent);

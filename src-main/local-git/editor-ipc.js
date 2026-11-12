@@ -87,6 +87,7 @@ function installEditorGit (ipc, webContents, {
     }});
     handle('publication-capabilities', adapter.capabilities);
     handle('publication-repository', adapter.repository);
+    handle('publication-stack-parent', adapter.stackParent);
     handle('publication-enqueue', adapter.enqueue);
     handle('publication-get', adapter.get);
     handle('publication-advance', adapter.advance);

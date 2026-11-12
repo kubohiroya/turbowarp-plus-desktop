@@ -136,6 +136,8 @@ Editor の「ファイル」→「保存してコミット」でコミットを�
 
 実 GitHub では、承認済みの検証用リポジトリで push、PR 作成、CI 待機、マージ結果の確認、選択した場合の Issue クローズを順に検証します。
 
+ネイティブの PR スタックを使う場合は `TW_PLUS_DESKTOP_GIT_PUBLICATION` に `stacks` を追加します。既存の親 PR は同じリポジトリで開いている必要があります。すでにスタックに属する場合は最上位を選びます。確認画面では親 PR 番号、親ブランチとコミット、スタックの反映先を確認できます。GitHub で下位の PR がすべてマージされ、反映先への更新後も完全な子 PR の差分が一致し、新しいコミットの CI とレビュー条件を満たすと、承認した子 PR のマージを進めます。バイナリアセットなど、完全な差分を確認できない場合は PR とスタックを作成し、自動マージを一時停止します。 [GitHub スタック API](https://docs.github.com/en/rest/pulls/stacks) · [スタックのマージ条件](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)
+
 開発時のモック検証は `TW_PLUS_DESKTOP_GIT_PUBLICATION_MODULE_DIR` を指定して `node --test test/local-git-publication.test.js` を実行します。配布には PR キューと GitHub 接続を含む `@kubohiroya/turbowarp-plus-editor-git` の依存版が必要です。切り戻しは `TW_PLUS_DESKTOP_GIT_PUBLICATION` を外して再起動します。
 
 ## 開発プロファイル

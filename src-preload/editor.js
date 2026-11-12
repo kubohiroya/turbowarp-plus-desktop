@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('EditorPreload', {
   localGitPublication: ipcRenderer.sendSync('local-git-publication-enabled') === true ? {
     capabilities: () => ipcRenderer.invoke('local-git-publication-capabilities'),
     repository: remote => ipcRenderer.invoke('local-git-publication-repository', remote),
+    stackParent: (remote, number) => ipcRenderer.invoke('local-git-publication-stack-parent', remote, number),
     enqueue: intent => ipcRenderer.invoke('local-git-publication-enqueue', intent),
     get: target => ipcRenderer.invoke('local-git-publication-get', target),
     advance: target => ipcRenderer.invoke('local-git-publication-advance', target)
