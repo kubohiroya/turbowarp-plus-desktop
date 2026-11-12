@@ -23,6 +23,18 @@ Windows 用 NSIS は Ubuntu でクロスビルドする。Wine は NSIS のア�
 
 CI で行うのは生成と内容の検査まで。開発用 artifact では配布用証明書、macOS 公証、GitHub Release、更新通知を使わない。製品版の同梱カタログとそのライセンスは #6、署名と対応環境での受け入れは #9 で管理する。
 
+## Desktop のアイコン
+
+`art/icon.svg` が原本。配色と「＋」のモチーフは [Plus Editor のアイコン](https://github.com/kubohiroya/turbowarp-plus-editor/blob/f029eb307e8c0bb6aa79e89ee060e0e3b0243620/assets/icon.svg)（GPL-3.0-or-later）に由来する。
+
+SVG を変更したときは、electron-builder のアイコンツールで開発用 PNG、macOS の ICNS、Windows の ICO、Linux 用 PNG を更新する。生成には `icons@1.1.0` のツールセットを使用した。
+
+```sh
+bash scripts/generate-desktop-icons.sh /path/to/icons-bundle/icon-tool.js
+```
+
+アイコンの切り戻しは SVG と生成物を同じコミットから復元し、配布物を再ビルドする。
+
 ## 再現手順と切り戻し
 
 表の runner に対応する OS／CPU で Desktop、固定 Editor、固定 Scratch GUI を並べて checkout する。Editor の `.nvmrc` の Node.js を使い、各 checkout で `npm ci`、GUI で `node scripts/prepublish.mjs` を実行する。macOS arm64 では Desktop から次を実行する。

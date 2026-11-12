@@ -270,6 +270,10 @@ app.on('second-instance', (event, argv, workingDirectory) => {
 });
 
 app.whenReady().then(() => {
+  if (!app.isPackaged && app.dock) {
+    app.dock.setIcon(path.resolve(__dirname, '../art/icon.png'));
+  }
+
   AbstractWindow.settingsChanged();
 
   if (projectProcess.worker) {
