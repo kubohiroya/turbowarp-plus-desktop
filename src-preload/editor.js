@@ -25,6 +25,10 @@ contextBridge.exposeInMainWorld('EditorPreload', {
     reservePopout: (kind, ticket) => ipcRenderer.sendSync('reserve-editor-popout', kind, ticket)
   }),
   workspaceProjectKey: (id) => ipcRenderer.sendSync('workspace-project-key', id),
+  workspaceLayouts: ipcRenderer.sendSync('workspace-layouts-enabled') === true ? {
+    read: key => ipcRenderer.invoke('read-dockview-layout', key),
+    write: (key, layout) => ipcRenderer.invoke('write-dockview-layout', key, layout)
+  } : null,
   externalYaml: ipcRenderer.sendSync('external-yaml-enabled') === true ? {
     open: () => ipcRenderer.invoke('open-external-yaml'),
     save: (id, revision, source) => ipcRenderer.invoke('save-external-yaml', id, revision, source),

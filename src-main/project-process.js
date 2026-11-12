@@ -6,7 +6,8 @@ const {app, dialog} = require('electron');
 const {projectIsolation, projectAssetTransfer, externalYaml} = require('../config/feature-flags');
 const {isYaml} = require('./external-yaml-files');
 const {ProjectAssets, validAssetInput} = require('./project-assets');
-const {discardWorkspaceLayouts} = require('./workspace-project-key');
+const {discardWorkspaceLayouts, hashWorkspaceKey} = require('./workspace-project-key');
+const {createDockviewLayoutStore} = require('./dockview-layout-store');
 const {ProjectLocks, ProjectBusy, identify, isSB3, assertOwned} = require('./project-lock');
 
 const dataRoot = process.env.TW_PLUS_DESKTOP_DATA_DIR ||
@@ -44,6 +45,7 @@ const launcher = () => {
   const locks = new ProjectLocks(path.join(dataRoot, 'project-locks'));
   const yamlLocks = externalYaml && new ProjectLocks(path.join(dataRoot, 'yaml-locks'),
     'This YAML file is already open in another project window.');
+  const layouts = externalYaml && createDockviewLayoutStore(dataRoot);
   const assets = projectAssetTransfer && new ProjectAssets(path.join(dataRoot, 'project-transfers'));
   const children = new Map();
   const queued = [];
@@ -126,6 +128,11 @@ const launcher = () => {
                   active = null;
                 }
                 reply(true);
+              } else if (layouts && (command === 'read-dockview-layout' || command === 'write-dockview-layout')) {
+                // A worker can only access the layout for the SB3 it currently has locked.
+                if (!active || args.key !== hashWorkspaceKey(active.key)) throw new Error('No project lock for this layout.');
+                reply(command === 'read-dockview-layout' ?
+                  layouts.read(args.key) : layouts.write(args.key, args.layout));
               } else if (yamlLocks && command === 'reserve-yaml') {
                 if (!isYaml(args.file) || !path.isAbsolute(args.file)) throw new Error('Select a YAML file.');
                 const identity = identify(args.file);
@@ -282,6 +289,16 @@ const stageTransferAsset = (kind, bytes) => {
 
 module.exports = {
   bootstrap, worker, open, reserve, cancel, commit, detach, verify, ready, stageTransferAsset,
+  workspaceLayouts: {
+    read(key) {
+      verify(activeLease);
+      return request('read-dockview-layout', {key});
+    },
+    write(key, layout) {
+      verify(activeLease);
+      return request('write-dockview-layout', {key, layout});
+    }
+  },
   readTransferAsset: (transferId, asset) => request('read-transfer-asset', {transferId, asset}),
   discardTransferAsset: transferId => request('discard-transfer-asset', {transferId}),
   yamlFiles: {reserve: file => request('reserve-yaml', {file}),

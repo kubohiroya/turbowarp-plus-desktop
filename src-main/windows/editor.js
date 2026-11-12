@@ -25,6 +25,7 @@ const SecurityPromptWindow = require('./security-prompt');
 const projectProcess = require('../project-process');
 const {isSB3} = require('../project-lock');
 const {workspaceProjectKey} = require('../workspace-project-key');
+const {validDockviewLayout, validDockviewKey} = require('../dockview-layout-store');
 const {ExternalYamlFiles} = require('../external-yaml-files');
 const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
@@ -680,6 +681,19 @@ class EditorWindow extends ProjectRunningWindow {
     });
     const yamlEnabled = projectProcess.worker && externalYaml;
     this.ipc.on('external-yaml-enabled', event => { event.returnValue = yamlEnabled; });
+    const workspaceLayoutsEnabled = plusRenderer && yamlEnabled;
+    this.ipc.on('workspace-layouts-enabled', event => { event.returnValue = workspaceLayoutsEnabled; });
+    if (workspaceLayoutsEnabled) {
+      this.ipc.handle('read-dockview-layout', (_event, key) => {
+        if (!validDockviewKey(key)) throw new Error('Invalid workspace key.');
+        return projectProcess.workspaceLayouts.read(key);
+      });
+      this.ipc.handle('write-dockview-layout', (_event, key, layout) => {
+        if (!validDockviewKey(key)) throw new Error('Invalid workspace key.');
+        if (!validDockviewLayout(layout)) return false;
+        return projectProcess.workspaceLayouts.write(key, layout);
+      });
+    }
     if (yamlEnabled) {
       const yaml = new ExternalYamlFiles(projectProcess.yamlFiles);
       let selectingYaml = false;
