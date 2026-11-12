@@ -2,6 +2,7 @@ const {GitServiceError} = require('./github-auth');
 const {startDesktopGit, PERSONAL_TOKEN, GIT_CREDENTIAL_HELPER} = require('./service');
 const {parseRemote} = require('./git-proxy');
 const {createDesktopPublication} = require('./publication');
+const {readGlobalGitAuthor} = require('./global-author');
 
 const EDITOR_DOCUMENT = 'tw-editor://./plus-gui/gui.html';
 let active = null;
@@ -12,7 +13,8 @@ function isTrustedEditorGitEvent (event, webContents) {
 }
 
 function installEditorGit (ipc, webContents, {
-  clientId, store, githubApi, promptPersonalToken, gitCredentialHelper, confirmGitCredential, publication
+  clientId, store, githubApi, promptPersonalToken, gitCredentialHelper, confirmGitCredential, publication,
+  readAuthor = readGlobalGitAuthor
 }) {
   const methods = [];
   if (clientId) methods.push('github-app');
@@ -67,6 +69,7 @@ function installEditorGit (ipc, webContents, {
   }
 
   ipc.on('local-git-enabled', event => { event.returnValue = !!clientId && trusted(event); });
+  ipc.on('local-git-author-enabled', event => { event.returnValue = trusted(event); });
   ipc.on('local-git-auth-enabled', event => {
     event.returnValue = (methods.length > 0 || hasGitCredentialHelper) && trusted(event);
   });
@@ -79,6 +82,7 @@ function installEditorGit (ipc, webContents, {
         error?.name === 'AbortError' ? 'ABORTED' : 'GIT_UNAVAILABLE');
     }
   });
+  handle('author', () => readAuthor());
   const publicationEnabled = Boolean(clientId && publication);
   ipc.on('local-git-publication-enabled', event => { event.returnValue = publicationEnabled && trusted(event); });
   if (publicationEnabled) {

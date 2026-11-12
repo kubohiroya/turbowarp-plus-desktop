@@ -1014,6 +1014,31 @@ test('an in-flight review step older than 60 seconds reads as unknown', () => {
     {code: 'REVIEW_STEP_CONFLICT'});
 });
 
+test('global Git author is read through Git and is available only to the Plus Editor', async () => {
+  const {EventEmitter} = require('node:events');
+  const {readGlobalGitAuthor} = require('../src-main/local-git/global-author');
+  const {installEditorGit} = require('../src-main/local-git/editor-ipc');
+  const author = {name: 'Test Author', email: '123+fixture@users.noreply.github.com'};
+  const readAuthor = () => readGlobalGitAuthor({run: async (program, args) => {
+    assert.equal(program, 'git');
+    assert.deepEqual(args.slice(0, 5), ['config', '--global', '--includes', '--null', '--get-regexp']);
+    return {stdout: `user.name\nEarlier Name\0user.name\n${author.name}\0user.email\n${author.email}\0`};
+  }});
+  const ipc = new EventEmitter();
+  const handlers = new Map();
+  ipc.handle = (name, handler) => handlers.set(name, handler);
+  const contents = new EventEmitter();
+  contents.mainFrame = {url: 'tw-editor://./plus-gui/gui.html'};
+  installEditorGit(ipc, contents, {readAuthor});
+  const event = {sender: contents, senderFrame: contents.mainFrame};
+  ipc.emit('local-git-author-enabled', event);
+  assert.equal(event.returnValue, true);
+  assert.deepEqual(await handlers.get('local-git-author')(event), author);
+  await assert.rejects(handlers.get('local-git-author')({...event, senderFrame: {url: contents.mainFrame.url}}),
+    {message: 'GIT_UNAVAILABLE'});
+  assert.equal(await readGlobalGitAuthor({run: async () => ({stdout: 'user.name\nOnly a name\0'})}), null);
+});
+
 test('the authorize handler passes the review grant through', async () => {
   const {EventEmitter} = require('node:events');
   const {installEditorGit} = require('../src-main/local-git/editor-ipc');

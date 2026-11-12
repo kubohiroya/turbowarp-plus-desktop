@@ -13,6 +13,9 @@ const localGit = {
 };
 
 contextBridge.exposeInMainWorld('EditorPreload', {
+  ...(ipcRenderer.sendSync('local-git-author-enabled') === true && {
+    localGitAuthor: () => ipcRenderer.invoke('local-git-author')
+  }),
   localGit: ipcRenderer.sendSync('local-git-enabled') === true ? localGit : null,
   localGitAuth: ipcRenderer.sendSync('local-git-auth-enabled') === true ? {
     ...localGit,
