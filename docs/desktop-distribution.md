@@ -35,6 +35,14 @@ bash scripts/generate-desktop-icons.sh /path/to/icons-bundle/icon-tool.js
 
 アイコンの切り戻しは SVG と生成物を同じコミットから復元し、配布物を再ビルドする。
 
+## 作品ファイルからの起動
+
+- macOS は Plus 専用 Bundle ID と `.sb3`・`.sb2`・`.sb` の編集アプリ登録を使用する。Finder の「このアプリケーションで開く」から、スペースを含むパスの作品を Plus で開く。公式版も選べることを確認する。
+- Windows の NSIS は Plus 専用 ProgID を各拡張子の「プログラムから開く」に登録する。公式版を既定にした状態で Plus を導入し、既定を維持したまま Plus を選んで作品を開けることを確認する。Plus をアンインストールすると、Plus の登録だけが消える。
+- Linux は `turbowarp-plus-desktop.desktop` の名前と、同名のアプリ識別子およびウィンドウクラスを使用する。AppImage のランチャーで既存の Scratch 作品の MIME 型を使い、公式版と別のアイコンで起動できることを確認する。
+
+配布設定を切り戻す場合は対象の差分を revert して再ビルドする。Windows の関連付けは Plus のアンインストーラーから解除する。既定のエディターは OS の設定で選び直せる。
+
 ## 再現手順と切り戻し
 
 表の runner に対応する OS／CPU で Desktop、固定 Editor、固定 Scratch GUI を並べて checkout する。Editor の `.nvmrc` の Node.js を使い、各 checkout で `npm ci`、GUI で `node scripts/prepublish.mjs` を実行する。macOS arm64 では Desktop から次を実行する。
