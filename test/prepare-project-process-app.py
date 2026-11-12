@@ -27,6 +27,7 @@ header = json.loads(raw_header)
 data = bytearray(archive[8 + header_size:])
 paths = (
     "config/feature-flags.js", "src-main/atomic-write-stream.js", "src-main/brand.js",
+    "src-main/dockview-layout-store.js",
     "src-main/entrypoint.js", "src-main/index.js", "src-main/project-lock.js",
     "src-main/project-process.js", "src-main/project-assets.js", "src-main/external-yaml-files.js", "src-main/windows/editor.js",
     "src-main/standard-renderer-save.js", "src-main/workspace-project-key.js", "src-main/windows/editor-popouts.js",
