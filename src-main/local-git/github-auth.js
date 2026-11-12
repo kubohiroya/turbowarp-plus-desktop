@@ -29,7 +29,9 @@ function restRateLimited (response) {
 }
 
 function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = delay, store} = {}) {
-  if (typeof clientId !== 'string' || !safeToken.test(clientId)) throw new Error('Invalid GitHub App client ID');
+  if (clientId !== undefined && (typeof clientId !== 'string' || !safeToken.test(clientId))) {
+    throw new Error('Invalid GitHub App client ID');
+  }
   let lifetime = new AbortController();
   let deviceFlow = null;
   let credentials = null;
@@ -39,7 +41,7 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
 
   const unauthorized = () => new GitServiceError(401, 'REAUTH_REQUIRED');
 
-  async function json (url, options, signal, rateLimit = false) {
+  async function json (url, options, signal, rateLimit = false, readError = true) {
     let response;
     try {
       response = await request(url, {
@@ -53,6 +55,10 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
     if (rateLimit && restRateLimited(response)) {
       await response.body?.cancel().catch(() => {});
       throw new GitServiceError(429, 'RATE_LIMITED', retryAfterSeconds(response.headers, now));
+    }
+    if (!readError && response.status !== 200) {
+      await response.body?.cancel().catch(() => {});
+      return {status: response.status};
     }
     try {
       return {status: response.status, value: await response.json()};
@@ -77,7 +83,7 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
   async function github (path, accessToken, signal, rateLimit) {
     const {status, value} = await json(API_URL + path, {
       headers: {Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + accessToken}
-    }, signal, rateLimit);
+    }, signal, rateLimit, false);
     if (status === 401) throw unauthorized();
     if (status === 429) throw new GitServiceError(429, 'RATE_LIMITED');
     if (status === 403 || status === 404) throw new GitServiceError(403, 'FORBIDDEN');
@@ -106,6 +112,7 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
   }
 
   async function begin (persist = false) {
+    if (!clientId) throw new GitServiceError(403, 'GIT_UNAVAILABLE');
     const {signal} = lifetime;
     if (deviceFlow || pending) throw new GitServiceError(409, 'AUTH_IN_PROGRESS');
     remember = persist;
@@ -208,11 +215,8 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
     return pending ?? track(refresh(credentials, lifetime.signal), lifetime.signal);
   }
 
-  async function restore () {
-    const {signal} = lifetime;
-    if (!store || deviceFlow || pending) return false;
-    const saved = await store.read(signal);
-    signal.throwIfAborted();
+  async function restore (saved) {
+    if (!clientId || deviceFlow || pending) return false;
     if (!saved || typeof saved.accessToken !== 'string' || !safeToken.test(saved.accessToken) ||
         typeof saved.refreshToken !== 'string' || !safeToken.test(saved.refreshToken) ||
         !Number.isSafeInteger(saved.expiresAt) || !Number.isSafeInteger(saved.refreshExpiresAt) ||
@@ -243,6 +247,7 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
 
   return {
     begin, finish, restore, getState, disconnect, getCredentials,
+    user: (accessToken, signal) => github('/user', accessToken, signal),
     // `rateLimit` reports a rate-limited lookup as `429 RATE_LIMITED` with `retryAfter` (the GitHub API routes).
     repository: (owner, repo, accessToken, signal, rateLimit = false) =>
       github('/repos/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo), accessToken, signal, rateLimit)

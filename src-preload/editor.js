@@ -1,16 +1,25 @@
 const {contextBridge, ipcRenderer} = require('electron');
 
+const localGit = {
+  getConnection: () => ipcRenderer.invoke('local-git-connection'),
+  getState: () => ipcRenderer.invoke('local-git-state'),
+  begin: (remember = false) => ipcRenderer.invoke('local-git-begin', remember),
+  finish: () => ipcRenderer.invoke('local-git-finish'),
+  restore: () => ipcRenderer.invoke('local-git-restore'),
+  authorizeRepository: (remote, write = false, review = false) =>
+    ipcRenderer.invoke('local-git-authorize', remote, write, review),
+  getSession: () => ipcRenderer.invoke('local-git-session'),
+  disconnect: () => ipcRenderer.invoke('local-git-disconnect')
+};
+
 contextBridge.exposeInMainWorld('EditorPreload', {
-  localGit: ipcRenderer.sendSync('local-git-enabled') === true ? {
-    getConnection: () => ipcRenderer.invoke('local-git-connection'),
-    getState: () => ipcRenderer.invoke('local-git-state'),
-    begin: (remember = false) => ipcRenderer.invoke('local-git-begin', remember),
-    finish: () => ipcRenderer.invoke('local-git-finish'),
-    restore: () => ipcRenderer.invoke('local-git-restore'),
-    authorizeRepository: (remote, write = false, review = false) =>
-      ipcRenderer.invoke('local-git-authorize', remote, write, review),
-    getSession: () => ipcRenderer.invoke('local-git-session'),
-    disconnect: () => ipcRenderer.invoke('local-git-disconnect')
+  localGit: ipcRenderer.sendSync('local-git-enabled') === true ? localGit : null,
+  localGitAuth: ipcRenderer.sendSync('local-git-auth-enabled') === true ? {
+    ...localGit,
+    getAuthMethods: remote => ipcRenderer.invoke('local-git-auth-methods', remote),
+    connectPersonalAccessToken: (remote, remember = false) =>
+      ipcRenderer.invoke('local-git-connect-personal-access-token', remote, remember),
+    connectGitCredential: (remote, login) => ipcRenderer.invoke('local-git-connect-git-credential', remote, login)
   } : null,
   ...(ipcRenderer.sendSync('editor-popouts-enabled') === true && {
     reservePopout: (kind, ticket) => ipcRenderer.sendSync('reserve-editor-popout', kind, ticket)

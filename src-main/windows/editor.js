@@ -28,16 +28,24 @@ const {workspaceProjectKey} = require('../workspace-project-key');
 const {ExternalYamlFiles} = require('../external-yaml-files');
 const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
+const {createPersonalTokenPrompt} = require('../local-git/personal-token-prompt');
+const {createGitCredentialHelper} = require('../local-git/git-credential-helper');
+const {PERSONAL_TOKEN} = require('../local-git/service');
 const {installEditorPopouts, isReservedPopout} = require('./editor-popouts');
-const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml} =
+const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml,
+  gitPersonalAccessToken, gitCredentialHelper} =
   require('../../config/feature-flags');
 
 const rendererDirectory = plusRenderer ? 'plus-gui' : 'gui';
-const gitClientId = process.env.TW_PLUS_DESKTOP_GIT_CLIENT_ID;
+const gitEnabled = plusRenderer && !projectProcess.worker;
+const gitClientIdOverride = process.env.TW_PLUS_DESKTOP_GIT_CLIENT_ID;
+const gitClientId = /^[A-Za-z0-9_]+$/u.test(gitClientIdOverride ?? '') ? gitClientIdOverride : undefined;
 // The GitHub API route groups of the loopback Git proxy, such as `pulls-read,review-threads,reviews-body`. Off by default.
 const gitGitHubApi = process.env.TW_PLUS_DESKTOP_GIT_GITHUB_API;
-const gitStore = plusRenderer && !projectProcess.worker && /^[A-Za-z0-9_]+$/u.test(gitClientId || '')
-  ? createCredentialStore({directory: app.getPath('userData'), clientId: gitClientId, safeStorage}) : null;
+const gitTokenPrompt = gitEnabled && gitPersonalAccessToken ? createPersonalTokenPrompt() : undefined;
+const credentialHelper = gitEnabled && gitCredentialHelper ? createGitCredentialHelper() : undefined;
+const gitStore = gitEnabled && (gitClientId || gitTokenPrompt || credentialHelper)
+  ? createCredentialStore({directory: app.getPath('userData'), clientId: gitClientId ?? PERSONAL_TOKEN, safeStorage}) : null;
 if (plusRenderer) {
   const rendererRoot = path.join(__dirname, '../../dist-renderer-webpack/editor', rendererDirectory);
   const buildInfoPath = path.join(rendererRoot, 'build-info.json');
@@ -735,10 +743,21 @@ class EditorWindow extends ProjectRunningWindow {
     const editorURL = new URL(`tw-editor://./${rendererDirectory}/gui.html`);
     if (gitStore) {
       installEditorGit(this.ipc, this.window.webContents, {
-        clientId: gitClientId, store: gitStore, githubApi: gitGitHubApi
+        clientId: gitClientId, store: gitStore, githubApi: gitGitHubApi, promptPersonalToken: gitTokenPrompt,
+        gitCredentialHelper: credentialHelper,
+        confirmGitCredential: async ({owner, repo}, login, signal) => {
+          const {response} = await dialog.showMessageBox(this.window, {
+            type: 'question', title: APP_NAME,
+            message: 'Use saved GitHub credentials?',
+            detail: 'Account: ' + login + '\nRepository: github.com/' + owner + '/' + repo,
+            buttons: ['Cancel', 'Use Git credentials'], cancelId: 0, defaultId: 0, noLink: true, signal
+          });
+          return response === 1;
+        }
       });
     } else {
       this.ipc.on('local-git-enabled', event => { event.returnValue = false; });
+      this.ipc.on('local-git-auth-enabled', event => { event.returnValue = false; });
     }
     this.ipc.on('editor-popouts-enabled', event => { event.returnValue = editorPopouts.size > 0; });
     if (editorPopouts.size) {

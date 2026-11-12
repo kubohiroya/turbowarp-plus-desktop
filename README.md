@@ -56,7 +56,7 @@ Plus renderer を同梱した配布用アプリでは、通常起動で Plus Edi
 
 Plus editor の別窓を検証する場合は、[Desktop の権限境界](docs/desktop-security-boundaries.md) を参照してください。
 
-### ローカル Git の開発接続
+### ローカル Git の GitHub 接続
 
 通常の Plus Editor 開発起動時に `TW_PLUS_DESKTOP_GIT_CLIENT_ID` へ device flow を有効にした GitHub App の公開 client ID を指定すると、Editor のトップフレームに `EditorPreload.localGit` が公開されます。認証後に選択リポジトリの許可を取得し、その短命セッションを Git Smart HTTP アダプターへ渡します。保存を選択した場合は OS の保護機能で暗号化し、保護機能が利用できない環境ではメモリ内で利用します。切断するとセッションと保存済みの資格情報を削除します。
 
@@ -66,7 +66,23 @@ GitHub App には次の設定が必要です。作り方は [GitHub App の作�
 - Expire user authorization tokens: オン（期限付きのトークンと更新用のトークンを前提にしています。オフだと更新用のトークンが返らず、接続に失敗します）
 - Repository permissions: Contents は Read and write、Pull requests は Read and write、Metadata は Read-only。ほかの権限は付けません
 
-Desktop は device flow を使うので、必要なのは公開してよい client ID だけです。クライアントシークレットや private key は使いません。現在の Desktop は client ID を開発起動時の環境変数 `TW_PLUS_DESKTOP_GIT_CLIENT_ID` からだけ読み（`src-main/windows/editor.js`）、配布版に client ID を入れる仕組みはまだありません。そのため、配布版でローカル Git の GitHub 接続を使うには、client ID が同梱されるまでの間、使う人が自分で上記の GitHub App を作り、client ID を環境変数で渡す必要があります。
+Desktop は device flow を使うので、必要なのは公開してよい client ID だけです。クライアントシークレットや private key は使いません。現在の Desktop は client ID を開発起動時の環境変数 `TW_PLUS_DESKTOP_GIT_CLIENT_ID` からだけ読み（`src-main/windows/editor.js`）、配布版に client ID を入れる仕組みはまだありません。そのため、配布版でローカル Git の GitHub 接続を使うには、client ID が同梱されるまでの間、使う人が自分で上記の GitHub App を作り、client ID を環境変数で渡す必要があります。client ID が無い場合も、下記の fine-grained personal access token または手元の Git の認証情報で接続できます。
+
+Device Flow では Desktop の画面に表示されたコードだけを GitHub に入力してください。他人から届いたコードは入力しないでください。接続の承認は GitHub の [Authorized GitHub Apps](https://github.com/settings/apps/authorizations) で取り消せます。配布用 App の悪用が疑われる場合は、配布者が App の Device Flow を停止し、必要に応じて App を作り直して公開 client ID を差し替えます。
+
+#### Fine-grained personal access token
+
+GitHub の設定で、接続したいリポジトリだけを選び、Contents を読み取り専用、push が必要なら読み書きに設定します。有効期限も設定してください。 [GitHub のトークン作成手順](https://docs.github.com/ja/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token)
+
+Desktop は OS のマスク付きダイアログで `github_pat_` から始まるトークンを受け取り、選択したリポジトリの ID と操作権限を確認します。Linux では Zenity または KDialog が使える環境で利用できます。保存は任意で、OS の保護機能を利用できる場合は暗号化します。期限切れや失効の後は、新しいトークンで接続し直してください。
+
+方式選択に対応する Editor は、トップフレームの `EditorPreload.localGitAuth.getAuthMethods()` で利用可能な方式を調べ、`fine-grained-pat` がある場合に `connectPersonalAccessToken(remote, remember)` を呼べます。トークンの入力画面は Desktop が表示します。旧 Editor の Device Flow 用 API は `EditorPreload.localGit` です。切り戻すときは必要に応じて先に切断し、`TW_PLUS_DESKTOP_GIT_PERSONAL_ACCESS_TOKEN=0` を指定して起動します。
+
+#### 手元の Git の認証情報
+
+`git` と、選択した GitHub リポジトリに適用される `credential.helper` の設定がある場合は、既存の認証情報を利用できます。接続ごとに GitHub のアカウント名とリポジトリを確認し、同意を受けてから認証情報を読みます。GitHub が返すアカウント名が確認画面と一致し、対象リポジトリにアクセスできるときに接続します。トークンはメモリに保持し、切断で破棄します。資格情報を再取得する場合はもう一度確認画面を表示します。
+
+Editor は `EditorPreload.localGitAuth.getAuthMethods(remote)` にリモートを渡し、`git-credential-helper` が返ったときに `connectGitCredential(remote, login)` を呼べます。切り戻すときは `TW_PLUS_DESKTOP_GIT_CREDENTIAL_HELPER=0` を指定して起動します。
 
 push の `git-receive-pack` POST には `Git-Push-Id`（小文字の UUID v4）が必要です。上流への送信前に有効なセッションで ID を予約し、同じ ID が届いた場合は `409 PUSH_DUPLICATE` を返します。予約はセッションの寿命に合わせて保持されます。 [共通契約](https://github.com/kubohiroya/turbowarp-plus-editor/issues/316)
 
