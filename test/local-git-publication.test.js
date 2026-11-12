@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const {createHash} = require('node:crypto');
 const {EventEmitter} = require('node:events');
 const fs = require('node:fs/promises');
 const {tmpdir} = require('node:os');
@@ -146,7 +147,12 @@ test('Desktop publication advances a confirmed immutable PR after a scoped branc
   assert.equal((await publication.enqueue(intent)).status, 'queued');
   assert.equal(prompts, 2);
   await assert.rejects(publication.enqueue({...intent, title: 'Changed'}), {code: 'PUBLICATION_CHANGED'});
-  assert.equal((await publication.advance(target)).awaitingPush, true);
+  const pendingPush = await publication.advance(target);
+  assert.equal(pendingPush.awaitingPush, true);
+  const session = service.getSession();
+  assert.equal(pendingPush.pushAccount, session.account.login);
+  assert.equal(pendingPush.pushSessionId, createHash('sha256').update(session.bearer).digest('hex'));
+  assert.equal(JSON.stringify(pendingPush).includes(session.bearer), false);
   assert.deepEqual(github.writes, []);
 
   github.state.branch = commitOid;

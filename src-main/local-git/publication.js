@@ -162,12 +162,15 @@ function createDesktopPublication ({contract, journal, capabilities, authorize, 
     async advance (value) {
       const target = validateTarget(value);
       if (value.retryRejectedMerge !== undefined && typeof value.retryRejectedMerge !== 'boolean') throw badRequest();
-      const {queue, awaitingPush} = await context(target);
+      const {queue, authorized, awaitingPush} = await context(target);
       const approved = await queue.get(target.id);
       if (!approved) throw new GitServiceError(404, 'PUBLICATION_NOT_FOUND');
       if (requiredCapabilities(approved.intent).some(capability => !enabled.has(capability))) throw denied();
       const updated = await queue.advance(target.id, {retryRejectedMerge: value.retryRejectedMerge === true});
-      return awaitingPush() ? {...updated, awaitingPush: true} : updated;
+      if (!awaitingPush()) return updated;
+      authorized.signal.throwIfAborted();
+      if (!/^[a-f0-9]{64}$/u.test(authorized.pushSessionId ?? '')) throw denied();
+      return {...updated, awaitingPush: true, pushAccount: authorized.account.login, pushSessionId: authorized.pushSessionId};
     }
   };
 }

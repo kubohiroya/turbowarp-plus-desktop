@@ -1,4 +1,4 @@
-const {randomBytes} = require('node:crypto');
+const {createHash, randomBytes} = require('node:crypto');
 const {createGitHubAuth, GitServiceError} = require('./github-auth');
 const {parseRemote, startGitProxy} = require('./git-proxy');
 const {applyResult, clearReviewRecords, createReviewRecords, reserveReview, reserveStep} = require('./review-submits');
@@ -294,7 +294,8 @@ async function startDesktopGit ({
           account.login.toLowerCase() !== selected.public.account.login.toLowerCase()) {
         throw new GitServiceError(403, 'FORBIDDEN');
       }
-      return {repositoryId: verified.id, accessToken, account, signal};
+      const pushSessionId = createHash('sha256').update(selected.public.bearer).digest('hex');
+      return {repositoryId: verified.id, accessToken, account, signal, pushSessionId};
     },
     getSession () {
       return session && !tokenReauthRequired && !expired(session) ? session.public : null;
