@@ -28,6 +28,9 @@ const {workspaceProjectKey} = require('../workspace-project-key');
 const {ExternalYamlFiles} = require('../external-yaml-files');
 const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
+const {installRepositoryCreation, loadCreationContract} = require('../local-git/repository-creation-ipc');
+const {createRepositoryCreationJournal} = require('../local-git/repository-creation-journal');
+const {createPublicationJournal, loadPublicationContract, publicationCapabilities} = require('../local-git/publication');
 const {createPersonalTokenPrompt} = require('../local-git/personal-token-prompt');
 const {createGitCredentialHelper} = require('../local-git/git-credential-helper');
 const {PERSONAL_TOKEN} = require('../local-git/service');
@@ -46,6 +49,20 @@ const gitTokenPrompt = gitEnabled && gitPersonalAccessToken ? createPersonalToke
 const credentialHelper = gitEnabled && gitCredentialHelper ? createGitCredentialHelper() : undefined;
 const gitStore = gitEnabled && (gitClientId || gitTokenPrompt || credentialHelper)
   ? createCredentialStore({directory: app.getPath('userData'), clientId: gitClientId ?? PERSONAL_TOKEN, safeStorage}) : null;
+// The regular credential provider never receives the account-level creation grant.
+const creationClientId = process.env.TW_PLUS_DESKTOP_GITHUB_CREATE_CLIENT_ID;
+const creationContract = gitEnabled && !process.mas && /^[A-Za-z0-9_]+$/u.test(creationClientId ?? '') &&
+  loadCreationContract(process.env.TW_PLUS_DESKTOP_GITHUB_CREATE_AUTH_MODULE, app.isPackaged);
+const creationJournal = creationContract && createRepositoryCreationJournal({
+  directory: app.getPath('userData'), clientId: creationClientId, safeStorage
+});
+const publishCapabilities = gitEnabled && !process.mas && gitClientId &&
+  publicationCapabilities(process.env.TW_PLUS_DESKTOP_GIT_PUBLICATION);
+const publishContract = publishCapabilities &&
+  loadPublicationContract(process.env.TW_PLUS_DESKTOP_GIT_PUBLICATION_MODULE_DIR, app.isPackaged);
+const publishJournal = publishContract && createPublicationJournal({
+  directory: app.getPath('userData'), clientId: gitClientId, safeStorage
+});
 if (plusRenderer) {
   const rendererRoot = path.join(__dirname, '../../dist-renderer-webpack/editor', rendererDirectory);
   const buildInfoPath = path.join(rendererRoot, 'build-info.json');
@@ -745,6 +762,34 @@ class EditorWindow extends ProjectRunningWindow {
       installEditorGit(this.ipc, this.window.webContents, {
         clientId: gitClientId, store: gitStore, githubApi: gitGitHubApi, promptPersonalToken: gitTokenPrompt,
         gitCredentialHelper: credentialHelper,
+        publication: publishContract && {
+          capabilities: publishCapabilities, contract: publishContract, journal: publishJournal,
+          confirm: async (intent, login, signal) => {
+            const ja = settings.locale?.startsWith('ja');
+            const labels = ja ? {
+              pr: 'PR の作成', merge: 'PR の作成とマージ', noChecks: 'CI チェックがない場合のマージを許可',
+              link: '関連 Issue', create: '新規 Issue', close: 'マージ後に Issue をクローズ'
+            } : {
+              pr: 'Create pull request', merge: 'Create and merge pull request', noChecks: 'Allow merge without check runs',
+              link: 'Linked issue', create: 'New issue', close: 'Close issue after merge'
+            };
+            const {issue} = intent;
+            const {response} = await dialog.showMessageBox(this.window, {
+              type: 'question', title: APP_NAME,
+              message: labels[intent.goal],
+              detail: [
+                login + ' → ' + intent.remote,
+                intent.head + ' (' + intent.commitOid + ') → ' + intent.base + ' (' + intent.baseOid + ')',
+                intent.title, intent.body,
+                intent.allowNoChecks ? labels.noChecks : '',
+                issue ? ('number' in issue ? labels.link + ' #' + issue.number : labels.create + '\n' + issue.title + '\n' + issue.body) : '',
+                issue?.closeAfterMerge ? labels.close : ''
+              ].filter(Boolean).join('\n\n'),
+              buttons: ja ? ['キャンセル', '承認'] : ['Cancel', 'Approve'], cancelId: 0, defaultId: 0, noLink: true, signal
+            });
+            return response === 1;
+          }
+        },
         confirmGitCredential: async ({owner, repo}, login, signal) => {
           const {response} = await dialog.showMessageBox(this.window, {
             type: 'question', title: APP_NAME,
@@ -758,7 +803,32 @@ class EditorWindow extends ProjectRunningWindow {
     } else {
       this.ipc.on('local-git-enabled', event => { event.returnValue = false; });
       this.ipc.on('local-git-auth-enabled', event => { event.returnValue = false; });
+      this.ipc.on('local-git-publication-enabled', event => { event.returnValue = false; });
     }
+    installRepositoryCreation(this.ipc, this.window.webContents, creationContract && {
+      clientId: creationClientId, contract: creationContract, journal: creationJournal,
+      confirmCreate: async ({owner, name, visibility, description, account}, signal) => {
+        const ja = settings.locale?.startsWith('ja');
+        const visibilityLabel = visibility === 'private' ? (ja ? '非公開' : 'Private') : (ja ? '公開' : 'Public');
+        const {response} = await dialog.showMessageBox(this.window, {
+          type: 'question', title: APP_NAME,
+          message: ja ? 'GitHub リポジトリを作成しますか？' : 'Create this GitHub repository?',
+          detail: `${account} → github.com/${owner}/${name}\n${visibilityLabel}\n${description}`,
+          buttons: ja ? ['キャンセル', '作成'] : ['Cancel', 'Create'], cancelId: 0, defaultId: 0, noLink: true, signal
+        });
+        return response === 1;
+      },
+      confirmAdoption: async ({owner, name, id, account}, signal) => {
+        const ja = settings.locale?.startsWith('ja');
+        const {response} = await dialog.showMessageBox(this.window, {
+          type: 'question', title: APP_NAME,
+          message: ja ? 'この空の GitHub リポジトリで作成を再開しますか？' : 'Continue with this empty GitHub repository?',
+          detail: `${account} → github.com/${owner}/${name} (ID ${id})`,
+          buttons: ja ? ['キャンセル', '再開'] : ['Cancel', 'Continue'], cancelId: 0, defaultId: 0, noLink: true, signal
+        });
+        return response === 1;
+      }
+    });
     this.ipc.on('editor-popouts-enabled', event => { event.returnValue = editorPopouts.size > 0; });
     if (editorPopouts.size) {
       this.handleEditorPopout = installEditorPopouts(this, editorURL, editorPopouts);

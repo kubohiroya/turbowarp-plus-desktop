@@ -100,6 +100,44 @@ TW_PLUS_DESKTOP_GIT_CLIENT_ID=<client ID> TW_PLUS_DESKTOP_GIT_GITHUB_API=pulls-r
 
 レビューの送信には、Editor が `authorizeRepository(remote, write, review)` の第3引数に `true` を渡して得た `review` 付きのセッションが必要です。GitHub のトークンとノード ID はメインプロセスに留め、Renderer には返しません。1回のレビューの送信は `Review-Submit-Id`（小文字の UUID v4）で表し、その手順の記録はセッションのメモリに `Git-Push-Id` とは別に合わせて 256 件まで持ち、切断・置換・期限切れで消します。経路・検証・応答・エラーの契約は Cloudflare 側と同じです。 [GitHub API routes](https://github.com/kubohiroya/hierarchidb/blob/main/packages/backend/bff/docs/git-smart-http.md#github-api-routes)（英語）
 
+#### リポジトリ作成の開発検証
+
+作成用の GitHub App の公開 client ID を `TW_PLUS_DESKTOP_GITHUB_CREATE_CLIENT_ID` に指定します。App では Device Flow と user authorization token の有効期限を有効にし、検証用の個人アカウントまたは組織にインストールして承認します。組織への作成には、認証するユーザーにその組織で指定した公開範囲のリポジトリを作成できる権限も必要です。
+
+| 操作 | 検証用 App のリポジトリ権限 |
+| --- | --- |
+| 作成先の確認とリポジトリ作成 | Repository creation の書き込み。Metadata の読み取り |
+| 作成したリポジトリに初回コミットを push | Contents の読み書き |
+| Topics の置き換えを検証する場合 | Administration の書き込みを追加して再承認 |
+
+作成専用権限で作ったリポジトリがインストール対象に加わることと、初回 push が通ることを分けて確認します。承認済みの新規検証用リポジトリ名を指定して、作成の確認、作成後の ID の照合、初回 push、Topics を選んだ場合の更新までを検証します。公開リポジトリの検証には公開の承認も必要です。 [GitHub App の権限](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app) · [個人・組織のリポジトリ作成と Topics 更新 API](https://docs.github.com/en/rest/repos/repos)
+
+作成用契約を含む `@kubohiroya/turbowarp-plus-editor-auth` のビルドを開発時に使う場合は、その `dist/index.js` の絶対パスを `TW_PLUS_DESKTOP_GITHUB_CREATE_AUTH_MODULE` で指定できます。配布にはこの契約を含む依存版の取り込みが必要です。模擬 GitHub での検証は次のコマンドで実行できます。
+
+```sh
+TW_PLUS_DESKTOP_GITHUB_CREATE_AUTH_MODULE=/absolute/path/to/auth/dist/index.js node --test test/local-git-creation.test.js test/local-git.test.js
+```
+
+作成用のセッションは `EditorPreload.localGitCreation` から始めます。作成内容は Desktop の確認画面で承認します。作成の結果は OS の保護機能で暗号化して記録します。応答が途切れた場合は、空の候補の ID を確かめて再開できます。初回 push 用のセッションは作成済みの ID と対象リポジトリにひもづきます。
+
+#### PR の作成と CI・マージ
+
+通常の GitHub App で対象リポジトリの書き込みを許可し、`TW_PLUS_DESKTOP_GIT_PUBLICATION` に操作を指定します。PR の作成には `pulls-read,pulls-write` が必要です。Issue の参照には `issues-read`、新規作成・マージ後のクローズにはさらに `issues-write` を指定します。CI を確認してマージする場合は `checks-read,merge` を追加します。
+
+```sh
+TW_PLUS_DESKTOP_GIT_CLIENT_ID=YOUR_GITHUB_APP_CLIENT_ID \
+TW_PLUS_DESKTOP_GIT_PUBLICATION=pulls-read,pulls-write,issues-read,issues-write,checks-read,merge \
+TW_PLUS_DESKTOP_GIT_PUBLICATION_MODULE_DIR=/absolute/path/to/editor-git/dist npm run electron:start
+```
+
+App を検証用リポジトリにインストールして承認し、Metadata の読み取り、Contents と Pull requests の読み書きを許可します。Issue を参照する場合は Issues の読み取り、作成やクローズも検証する場合は読み書きを許可します。CI の確認には Checks と Commit statuses の読み取りを付けます。既存の CI ワークフローを使い、Squash merge を有効にして、対象ブランチの保護ルールに必要なチェックとレビューをそろえます。 [PR と非同期マージ API](https://docs.github.com/en/rest/pulls/pulls) · [Issue API](https://docs.github.com/en/rest/issues/issues) · [Checks API](https://docs.github.com/en/rest/checks/runs) · [Commit statuses API](https://docs.github.com/en/rest/commits/statuses)
+
+Editor の「ファイル」→「保存してコミット」でコミットを作成し、その行の「PR を作成・確認」から内容を入力します。Desktop の確認画面で承認した PR の内容と操作範囲は、OS の保護機能で暗号化して保存します。Editor が PR 専用ブランチを push し、Desktop が承認済みのコミットと一致することを確かめてからキューを進めます。作業を再開する場合は GitHub に接続し、同じコミットの「PR を作成・確認」を開きます。
+
+実 GitHub では、承認済みの検証用リポジトリで push、PR 作成、CI 待機、マージ結果の確認、選択した場合の Issue クローズを順に検証します。
+
+開発時のモック検証は `TW_PLUS_DESKTOP_GIT_PUBLICATION_MODULE_DIR` を指定して `node --test test/local-git-publication.test.js` を実行します。配布には PR キューと GitHub 接続を含む `@kubohiroya/turbowarp-plus-editor-git` の依存版が必要です。切り戻しは `TW_PLUS_DESKTOP_GIT_PUBLICATION` を外して再起動します。
+
 ## 開発プロファイル
 
 macOS の既定の保存先は `~/Library/Application Support/TurboWarp Plus Desktop` です。個別の検証では `TW_PLUS_DESKTOP_DATA_DIR` に新しいディレクトリを指定できます。

@@ -42,7 +42,7 @@ function upstreamError (status) {
 }
 
 async function startGitProxy ({
-  authorize, resolveRedirect, authorizeGitHub, githubApi, now = Date.now, request = fetch, origin = EDITOR_ORIGIN,
+  authorize, resolveRedirect, authorizeGitHub, githubApi, handleCreation, now = Date.now, request = fetch, origin = EDITOR_ORIGIN,
   maxRequestBytes = MAX_REQUEST_BYTES
 }) {
   let address;
@@ -60,6 +60,7 @@ async function startGitProxy ({
       return fail(res, 403, 'FORBIDDEN');
     }
     res.setHeader('Access-Control-Allow-Origin', origin);
+    if (handleCreation && req.url.startsWith('/v1/github-create/')) return handleCreation(req, res);
     if (isGitHubApiPath(req.url)) return handleGitHubApi(req, res, github);
     const preflight = req.method === 'OPTIONS';
     const method = preflight ? req.headers['access-control-request-method'] : req.method;

@@ -5,6 +5,21 @@ const {createHash, randomUUID} = require('node:crypto');
 const LINUX_KEYRINGS = new Set(['gnome_libsecret', 'kwallet', 'kwallet5', 'kwallet6']);
 const MAX_RECORD_BYTES = 64 * 1024;
 
+async function createSafeStorageCodec (safeStorage, platform = process.platform) {
+  if (platform === 'linux') {
+    // Use the backend that was explicitly checked, rather than an asynchronous fallback provider.
+    if (!safeStorage.isEncryptionAvailable() || !LINUX_KEYRINGS.has(safeStorage.getSelectedStorageBackend())) return null;
+    return {
+      encrypt: value => safeStorage.encryptString(value),
+      decrypt: bytes => ({result: safeStorage.decryptString(bytes), shouldReEncrypt: false})
+    };
+  }
+  if ((platform === 'darwin' || platform === 'win32') && await safeStorage.isAsyncEncryptionAvailable()) {
+    return {encrypt: value => safeStorage.encryptStringAsync(value), decrypt: bytes => safeStorage.decryptStringAsync(bytes)};
+  }
+  return null;
+}
+
 function createCredentialStore ({directory, clientId, safeStorage, platform = process.platform}) {
   const root = path.join(directory, 'local-git');
   const file = path.join(root, createHash('sha256').update(clientId).digest('hex') + '.bin');
@@ -15,20 +30,7 @@ function createCredentialStore ({directory, clientId, safeStorage, platform = pr
     return result;
   };
 
-  async function codec () {
-    if (platform === 'linux') {
-      // Use the backend that was explicitly checked, rather than an asynchronous fallback provider.
-      if (!safeStorage.isEncryptionAvailable() || !LINUX_KEYRINGS.has(safeStorage.getSelectedStorageBackend())) return null;
-      return {
-        encrypt: value => safeStorage.encryptString(value),
-        decrypt: bytes => ({result: safeStorage.decryptString(bytes), shouldReEncrypt: false})
-      };
-    }
-    if ((platform === 'darwin' || platform === 'win32') && await safeStorage.isAsyncEncryptionAvailable()) {
-      return {encrypt: value => safeStorage.encryptStringAsync(value), decrypt: bytes => safeStorage.decryptStringAsync(bytes)};
-    }
-    return null;
-  }
+  const codec = () => createSafeStorageCodec(safeStorage, platform);
 
   async function replace (bytes, signal) {
     if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > MAX_RECORD_BYTES) return false;
@@ -80,4 +82,4 @@ function createCredentialStore ({directory, clientId, safeStorage, platform = pr
   };
 }
 
-module.exports = {createCredentialStore};
+module.exports = {createCredentialStore, createSafeStorageCodec};
