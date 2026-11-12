@@ -6,7 +6,7 @@ const {app, dialog} = require('electron');
 const {projectIsolation, projectAssetTransfer, externalYaml} = require('../config/feature-flags');
 const {isYaml} = require('./external-yaml-files');
 const {ProjectAssets, validAssetInput} = require('./project-assets');
-const {readWorkspaceLayout, writeWorkspaceLayout} = require('./workspace-layout-store');
+const {discardWorkspaceLayouts} = require('./workspace-project-key');
 const {ProjectLocks, ProjectBusy, identify, isSB3, assertOwned} = require('./project-lock');
 
 const dataRoot = process.env.TW_PLUS_DESKTOP_DATA_DIR ||
@@ -242,6 +242,7 @@ const bootstrap = runEditor => {
   if (!profile || (worker && (!projectIsolation || !process.connected))) return app.exit(1);
   fs.mkdirSync(profile, {recursive: true, mode: 0o700});
   app.setPath('userData', profile);
+  if (!worker) discardWorkspaceLayouts(dataRoot);
   if (!projectIsolation) return runEditor();
   if (!worker) return launcher();
   process.on('message', message => {
@@ -285,18 +286,6 @@ module.exports = {
   discardTransferAsset: transferId => request('discard-transfer-asset', {transferId}),
   yamlFiles: {reserve: file => request('reserve-yaml', {file}),
     release: token => request('release-yaml', {token}), verify},
-  workspaceLayout: {
-    read() {
-      if (!activeLease) return null;
-      verify(activeLease);
-      return readWorkspaceLayout(dataRoot, activeLease.key);
-    },
-    write(raw) {
-      if (!activeLease) return;
-      verify(activeLease);
-      writeWorkspaceLayout(dataRoot, activeLease.key, raw);
-    }
-  },
   initialLease: () => activeLease,
   setEditor: window => { editor = window; }
 };

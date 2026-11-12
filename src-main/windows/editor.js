@@ -24,6 +24,7 @@ const ExtensionDocumentationWindow = require('./extension-documentation.js');
 const SecurityPromptWindow = require('./security-prompt');
 const projectProcess = require('../project-process');
 const {isSB3} = require('../project-lock');
+const {workspaceProjectKey} = require('../workspace-project-key');
 const {ExternalYamlFiles} = require('../external-yaml-files');
 const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
@@ -31,7 +32,7 @@ const {createPersonalTokenPrompt} = require('../local-git/personal-token-prompt'
 const {createGitCredentialHelper} = require('../local-git/git-credential-helper');
 const {PERSONAL_TOKEN} = require('../local-git/service');
 const {installEditorPopouts, isReservedPopout} = require('./editor-popouts');
-const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml, workspaceLayout,
+const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml,
   gitPersonalAccessToken, gitCredentialHelper} =
   require('../../config/feature-flags');
 
@@ -668,19 +669,15 @@ class EditorWindow extends ProjectRunningWindow {
     this.ipc.on('project-json-transfer-enabled', event => {
       event.returnValue = projectProcess.worker && projectJSONTransfer;
     });
-    const workspaceEnabled = projectProcess.worker && workspaceLayout;
-    this.ipc.on('workspace-layout-enabled', event => { event.returnValue = workspaceEnabled; });
-    if (workspaceEnabled) {
-      this.ipc.on('read-workspace-layout', event => {
-        try { event.returnValue = projectProcess.workspaceLayout.read(); }
-        catch (error) { event.returnValue = null; console.error(error.message); }
-      });
-      this.ipc.on('write-workspace-layout', (event, raw) => {
-        try { projectProcess.workspaceLayout.write(raw); }
-        catch (error) { console.error(error.message); }
-        finally { event.returnValue = null; }
-      });
-    }
+    // The editor keeps the Dockview layout of each SB3 under this key, with or without project isolation.
+    this.ipc.on('workspace-project-key', (event, id) => {
+      try {
+        const file = getFileById(id);
+        event.returnValue = file.type === TYPE_FILE ? workspaceProjectKey(file.path) : null;
+      } catch {
+        event.returnValue = null;
+      }
+    });
     const yamlEnabled = projectProcess.worker && externalYaml;
     this.ipc.on('external-yaml-enabled', event => { event.returnValue = yamlEnabled; });
     if (yamlEnabled) {
