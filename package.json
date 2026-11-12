@@ -64,6 +64,7 @@
     "url": "https://github.com/kubohiroya/turbowarp-plus-desktop/issues"
   },
   "main": "./src-main/entrypoint.js",
+  "desktopName": "turbowarp-plus-desktop.desktop",
   "build": {
     "appId": "io.github.kubohiroya.turbowarpplus.desktop",
     "productName": "TurboWarp Plus Desktop",
@@ -145,6 +146,29 @@
           "arch": "universal",
           "target": "dmg"
         }
+      ],
+      "fileAssociations": [
+        {
+          "ext": "sb3",
+          "name": "Scratch 3 Project",
+          "description": "Scratch 3 Project",
+          "role": "Editor",
+          "mimeType": "application/x.scratch.sb3"
+        },
+        {
+          "ext": "sb2",
+          "name": "Scratch 2 Project",
+          "description": "Scratch 2 Project",
+          "role": "Editor",
+          "mimeType": "application/x.scratch.sb2"
+        },
+        {
+          "ext": "sb",
+          "name": "Scratch 1 Project",
+          "description": "Scratch 1 Project",
+          "role": "Editor",
+          "mimeType": "application/x.scratch.sb"
+        }
       ]
     },
     "mas": {
@@ -166,13 +190,9 @@
       "category": "Development",
       "desktop": {
         "entry": {
-          "StartupWMClass": "turbowarp-desktop",
           "Keywords": "scratch;"
         }
       },
-      "extraFiles": [
-        "linux-files"
-      ],
       "target": [
         {
           "target": "deb"
@@ -183,7 +203,31 @@
         {
           "target": "tar.gz"
         }
-      ]
+      ],
+      "fileAssociations": [
+        {
+          "ext": "sb3",
+          "name": "Scratch 3 Project",
+          "description": "Scratch 3 Project",
+          "role": "Editor",
+          "mimeType": "application/x.scratch.sb3"
+        },
+        {
+          "ext": "sb2",
+          "name": "Scratch 2 Project",
+          "description": "Scratch 2 Project",
+          "role": "Editor",
+          "mimeType": "application/x.scratch.sb2"
+        },
+        {
+          "ext": "sb",
+          "name": "Scratch 1 Project",
+          "description": "Scratch 1 Project",
+          "role": "Editor",
+          "mimeType": "application/x.scratch.sb"
+        }
+      ],
+      "syncDesktopName": true
     },
     "snap": {
       "summary": "Scratch mod with a compiler, dark mode, a bunch of addons, and more.",
@@ -201,30 +245,7 @@
     },
     "appImage": {
       "license": null
-    },
-    "fileAssociations": [
-      {
-        "ext": "sb3",
-        "name": "Scratch 3 Project",
-        "description": "Scratch 3 Project",
-        "role": "Editor",
-        "mimeType": "application/x.scratch.sb3"
-      },
-      {
-        "ext": "sb2",
-        "name": "Scratch 2 Project",
-        "description": "Scratch 2 Project",
-        "role": "Editor",
-        "mimeType": "application/x.scratch.sb2"
-      },
-      {
-        "ext": "sb",
-        "name": "Scratch 1 Project",
-        "description": "Scratch 1 Project",
-        "role": "Editor",
-        "mimeType": "application/x.scratch.sb"
-      }
-    ]
+    }
   },
   "private": true
 }
