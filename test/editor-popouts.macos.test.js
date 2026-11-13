@@ -10,6 +10,7 @@ const {test} = require('node:test');
 const editor = process.env.TW_PLUS_TEST_EDITOR_CHECKOUT;
 const fixture = process.env.TW_PLUS_TEST_SB3;
 const headed = process.env.TW_PLUS_TEST_SHOW_WINDOWS === '1';
+const offline = process.env.TW_PLUS_TEST_OFFLINE === '1';
 const repo = path.resolve(__dirname, '..');
 const kinds = ['backpack', 'stage', 'sprite-list', 'sprite-properties', 'code'];
 const layoutLabel = /^(Window layout|レイアウト変更)$/;
@@ -36,6 +37,7 @@ test('editor popouts require a reservation and isolate each child', {
   skip: process.platform !== 'darwin' || !editor || !fixture,
   timeout: 90000
 }, async t => {
+  assert.ok(!offline || !headed, 'Offline verification uses the hidden test entry point');
   const editorRevision = process.env.E2E_EXPECT_SITE_REVISION;
   assert.match(editorRevision || '', /^[a-f0-9]{40}$/, 'Set E2E_EXPECT_SITE_REVISION to a full Editor SHA');
   const renderer = path.join(repo, 'dist-renderer-webpack/editor/plus-gui/build-info.json');
@@ -86,6 +88,17 @@ test('editor popouts require a reservation and isolate each child', {
         const window = await app.browserWindow(page);
         assert.equal(await window.evaluate(win => win.isVisible()), headed);
         if (!headed) assert.equal(await window.evaluate(win => win.isFocused()), false);
+        if (offline) {
+          const result = await app.evaluate(async ({session}) => {
+            try {
+              await session.defaultSession.fetch('https://offline-check.invalid/');
+              return 'reachable';
+            } catch (error) {
+              return error.message;
+            }
+          });
+          assert.match(result, /ERR_PROXY_CONNECTION_FAILED/);
+        }
         await verify(app, page);
       } finally {
         await app.close();
@@ -240,9 +253,8 @@ test('editor popouts require a reservation and isolate each child', {
     await click(page.getByRole('menuitemcheckbox', {name: /Show undock buttons|アンドックボタンを表示/}));
 
     const stage = await open('stage', async () => {
-      // The menu bar launcher replaces the stage drawer's edge handle (Layout 0.1.36 and later).
       await press(/^(Stage opening options|ステージの開き方)$/);
-      await click(page.getByRole('menuitem', {name: /^(Open in a separate window|別ウィンドウで開く)$/}));
+      await click(page.getByRole('menuitem', {name: /^(Show in a separate window|別ウィンドウで表示)$/}));
     });
     await verifyChild('stage', stage);
     await stage.close();
