@@ -3,6 +3,7 @@ const {randomUUID} = require('node:crypto');
 const {Readable} = require('node:stream');
 const {pipeline} = require('node:stream/promises');
 const {GitServiceError} = require('./github-auth');
+const {handleGitHubApi, isGitHubApiPath, parseGitHubApiFeatures} = require('./github-api');
 
 const GITHUB = 'https://github.com';
 const EDITOR_ORIGIN = 'tw-editor://.';
@@ -41,9 +42,11 @@ function upstreamError (status) {
 }
 
 async function startGitProxy ({
-  authorize, resolveRedirect, request = fetch, origin = EDITOR_ORIGIN, maxRequestBytes = MAX_REQUEST_BYTES
+  authorize, resolveRedirect, authorizeGitHub, githubApi, handleCreation, now = Date.now, request = fetch, origin = EDITOR_ORIGIN,
+  maxRequestBytes = MAX_REQUEST_BYTES
 }) {
   let address;
+  const github = {features: parseGitHubApiFeatures(githubApi), authorize: authorizeGitHub, request, now};
   function fail (res, status, code) {
     res.writeHead(status, {'Content-Type': 'application/json'});
     res.end(JSON.stringify({code, requestId: randomUUID()}));
@@ -57,6 +60,8 @@ async function startGitProxy ({
       return fail(res, 403, 'FORBIDDEN');
     }
     res.setHeader('Access-Control-Allow-Origin', origin);
+    if (handleCreation && req.url.startsWith('/v1/github-create/')) return handleCreation(req, res);
+    if (isGitHubApiPath(req.url)) return handleGitHubApi(req, res, github);
     const preflight = req.method === 'OPTIONS';
     const method = preflight ? req.headers['access-control-request-method'] : req.method;
     const route = req.url.startsWith('/v1/git/') && parseGitPath(req.url.slice('/v1/git'.length), method);

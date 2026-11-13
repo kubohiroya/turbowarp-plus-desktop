@@ -3,7 +3,7 @@ import {execFileSync} from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {verifyEditorLayout} from './editor-layout-pin.mjs';
+import {verifyEditorWorkbench} from './editor-workbench-pin.mjs';
 
 const desktop = path.resolve(import.meta.dirname, '..');
 const [editorArgument, guiArgument] = process.argv.slice(2);
@@ -30,7 +30,7 @@ await source.verifyDocumentEditorDependency(editor, pins);
 await source.verifyLoaderDependency(editor, pins);
 await source.verifySecurityDependency(editor, pins);
 await source.verifyScriptTransferDependency(editor, pins);
-const editorLayout = await verifyEditorLayout(editor);
+const editorWorkbench = await verifyEditorWorkbench(editor);
 const {buildFamilyNotices} = await editorModule('family-notices.ts');
 
 const outputRoot = path.join(desktop, 'dist-renderer-webpack/editor');
@@ -68,7 +68,7 @@ try {
     desktopRevision: revision(desktop),
     desktopDirty: git(desktop, 'status', '--porcelain', '--untracked-files=no') !== '',
     desktopVersion, electronVersion, editorRevision, guiRevision, vmRevision: pins.vmRevision,
-    editorLayout, previewReloadStyles: pins.previewReloadStyles, familyNotices
+    editorWorkbench, previewReloadStyles: pins.previewReloadStyles, familyNotices
   };
   await fs.writeFile(path.join(stage, 'build-info.json'), JSON.stringify(buildInfo, null, 2) + '\n');
   await fs.rm(destination, {recursive: true, force: true});

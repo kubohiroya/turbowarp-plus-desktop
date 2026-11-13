@@ -1,25 +1,32 @@
-# D6 Desktop の作品別ワークスペース復元
+# Desktop の作品別ワークスペース復元
 
-[Layout Issue #1](https://github.com/kubohiroya/turbowarp-plus-editor-layout/issues/1) のDesktop統合。D6を含むEditorレンダラーで、`TW_PLUS_DESKTOP_PROJECT_ISOLATION=1` と `TW_PLUS_DESKTOP_WORKSPACE_LAYOUT=1` を指定する。
+[kubohiroya/turbowarp-plus-editor#502](https://github.com/kubohiroya/turbowarp-plus-editor/issues/502) と Desktop #52 の保存経路。Workbench がレイアウトを作成・復元し、作品分離モードで開いた SB3 の配置は、Desktop の起動係が作品別に保存する。Web とファイルの識別キーがない作品では、Workbench の IndexedDB を使う。
 
-- SB3を開いている作品プロセスが、ロックの所有を確認してから、作品の正規化されたパスに対応する配置をユーザーデータの `workspace-layouts` に保存する。SB3自体には配置を書き込まない。
-- タブの順番、選択中のタブとグループ、分割の向きとサイズを再起動後に復元する。外部YAMLは、再起動後にファイルメニューから明示的に選び直す。作品内YAMLは通常の配置復元の対象。
-- 切り戻す場合は作品を保存してDesktopの全プロセスを終了し、`TW_PLUS_DESKTOP_WORKSPACE_LAYOUT=0` で再起動する。以前の配置設定は削除されない。D5の外部YAMLが有効な場合は、配置保存なしでDockviewを使える。
+- `EditorPreload.workspaceProjectKey(id)` は、Editor が開いているファイルの ID（Redux の `fileHandle.id`）を受け取り、そのファイルの正規化したパスの SHA-256 を返す。パスそのものはレンダラーに渡さない。URL やサンプルから開いた作品には `null` を返し、Editor は作品名とスプライトで見分ける。
+- Plus renderer で作品分離（`TW_PLUS_DESKTOP_PROJECT_ISOLATION=1`）と外部 YAML（`TW_PLUS_DESKTOP_EXTERNAL_YAML=1`）を有効にすると、起動係が `dockview-layouts` に保存する。読み書きは、その時点で SB3 のロックを持つ作品プロセスに限る。一時プロファイルの削除は従来どおり行う。
+- 以前の版がユーザーデータの `workspace-layouts` に保存していた配置は、起動時に読まずに削除する。移行はしない。
+- 作品あたり256 KiBまで、最近使った100作品分を保持する。レイアウトを作る条件は Workbench の README の「Dockview のレイアウトの保存」に従う。
 
 ## 採用版の記録
 
-Desktop は Layout を直接の依存にしない。固定 Editor の `package.json`・`package-lock.json` が npm の完全一致版と SHA-512 integrity で固定し、`npm run webpack:plus` がその版を解決してインストール済みの版と照合したうえで、Plus レンダラーの `build-info.json` の `editorLayout` に記録する。開発用 artifact の作成時も同じ照合を行う。検証結果を報告するときは、この `editorLayout.version` を採用版として示す。
+Desktop は Workbench（旧 Layout）を直接の依存にしない。固定 Editor の `package.json`・`package-lock.json` が npm の完全一致版と SHA-512 integrity で固定し、`npm run webpack:plus` がその版を解決してインストール済みの版と照合したうえで、Plus レンダラーの `build-info.json` の `editorWorkbench` に記録する。開発用 artifact の作成時も同じ照合を行う。検証結果を報告するときは、この `editorWorkbench.version` を採用版として示す。
 
-## macOSの検証
+## 検証
 
-D6を含むEditorレンダラーと、Editorの `scripts/yaml-editor/build-settings-fixture.ts` で生成したSB3を用意する。テストでは2作品を別プロセスで開き、Editorの保存メニューでそれぞれのSB3に書き込んだ後、両プロセスと起動係を終了する。順番を逆にして再起動し、再読込したSB3の内容、タブ順・選択、分割位置・寸法を照合する。分割操作にはPlaywrightを使う。
+`npm test` の `test/workspace-project-key.test.js` が、キーの算出と古い配置の削除を確かめる。
+
+### Desktop #52 の再現と検証手順
+
+修正前は、一時プロファイル内の IndexedDB に配置が保存され、プロセス内の再読み込みでは復元できた。Desktop を終了して再起動すると、一時プロファイルが削除されて両作品とも初期配置に戻った。 [修正前の検証結果](https://github.com/kubohiroya/turbowarp-plus-desktop/issues/52#issuecomment-6824975113)
+
+Desktop のチェックアウトで固定 renderer をビルドし、再現テストを実行する。入力 SB3 は拡張機能を含まず、背景とスプライトを各1つ以上持つものを使う。テストは入力をコピーして分離したプロファイルで実行し、終了前後の配置を出力する。
 
 ```sh
-work=$(mktemp -d)
-python3 test/prepare-project-process-app.py /Applications/TurboWarp.app "$work/TurboWarp Plus D6.app" \
-  --renderer /absolute/path/to/desktop-renderer
-TW_D6_TEST_APP="$work/TurboWarp Plus D6.app" \
-  TW_D6_TEST_SB3=/absolute/path/to/settings.sb3 \
-  TW_D6_PLAYWRIGHT=/absolute/path/to/editor/node_modules/playwright \
-  npm run test:macos:workspace-layout
+npm run webpack:plus -- /absolute/path/to/editor /absolute/path/to/gui
+TW_PLUS_TEST_EDITOR_CHECKOUT=/absolute/path/to/editor \
+TW_PLUS_TEST_SB3=/absolute/path/to/fixture.sb3 \
+TW_PLUS_TEST_SHOW_WINDOWS=0 \
+node --test test/workspace-layout.macos.test.js
 ```
+
+テストでは、同名で内容が同じ2つの SB3 に異なるタブ順・選択・分割寸法を設定する。Desktop を再起動し、逆順に開いて各作品の配置を比較する。別作品のレイアウトへの読み書きが拒否されることも確認する。検証した Desktop・Editor のコミットと Workbench の版はテストログに出力する。 [検証記録](https://github.com/kubohiroya/turbowarp-plus-desktop/issues/52)

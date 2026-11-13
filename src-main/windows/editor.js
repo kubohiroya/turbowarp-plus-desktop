@@ -24,17 +24,46 @@ const ExtensionDocumentationWindow = require('./extension-documentation.js');
 const SecurityPromptWindow = require('./security-prompt');
 const projectProcess = require('../project-process');
 const {isSB3} = require('../project-lock');
+const {workspaceProjectKey} = require('../workspace-project-key');
+const {validDockviewLayout, validDockviewKey} = require('../dockview-layout-store');
 const {ExternalYamlFiles} = require('../external-yaml-files');
 const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
+const {installRepositoryCreation, loadCreationContract} = require('../local-git/repository-creation-ipc');
+const {createRepositoryCreationJournal} = require('../local-git/repository-creation-journal');
+const {createPublicationJournal, loadPublicationContract, publicationCapabilities} = require('../local-git/publication');
+const {createPersonalTokenPrompt} = require('../local-git/personal-token-prompt');
+const {createGitCredentialHelper} = require('../local-git/git-credential-helper');
+const {PERSONAL_TOKEN} = require('../local-git/service');
 const {installEditorPopouts, isReservedPopout} = require('./editor-popouts');
-const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml, workspaceLayout} =
+const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml,
+  gitPersonalAccessToken, gitCredentialHelper} =
   require('../../config/feature-flags');
 
 const rendererDirectory = plusRenderer ? 'plus-gui' : 'gui';
-const gitClientId = process.env.TW_PLUS_DESKTOP_GIT_CLIENT_ID;
-const gitStore = plusRenderer && !projectProcess.worker && /^[A-Za-z0-9_]+$/u.test(gitClientId || '')
-  ? createCredentialStore({directory: app.getPath('userData'), clientId: gitClientId, safeStorage}) : null;
+const gitEnabled = plusRenderer && !projectProcess.worker;
+const gitClientIdOverride = process.env.TW_PLUS_DESKTOP_GIT_CLIENT_ID;
+const gitClientId = /^[A-Za-z0-9_]+$/u.test(gitClientIdOverride ?? '') ? gitClientIdOverride : undefined;
+// The GitHub API route groups of the loopback Git proxy, such as `pulls-read,review-threads,reviews-body`. Off by default.
+const gitGitHubApi = process.env.TW_PLUS_DESKTOP_GIT_GITHUB_API;
+const gitTokenPrompt = gitEnabled && gitPersonalAccessToken ? createPersonalTokenPrompt() : undefined;
+const credentialHelper = gitEnabled && gitCredentialHelper ? createGitCredentialHelper() : undefined;
+const gitStore = gitEnabled && (gitClientId || gitTokenPrompt || credentialHelper)
+  ? createCredentialStore({directory: app.getPath('userData'), clientId: gitClientId ?? PERSONAL_TOKEN, safeStorage}) : null;
+// The regular credential provider never receives the account-level creation grant.
+const creationClientId = process.env.TW_PLUS_DESKTOP_GITHUB_CREATE_CLIENT_ID;
+const creationContract = gitEnabled && !process.mas && /^[A-Za-z0-9_]+$/u.test(creationClientId ?? '') &&
+  loadCreationContract(process.env.TW_PLUS_DESKTOP_GITHUB_CREATE_AUTH_MODULE, app.isPackaged);
+const creationJournal = creationContract && createRepositoryCreationJournal({
+  directory: app.getPath('userData'), clientId: creationClientId, safeStorage
+});
+const publishCapabilities = gitEnabled && !process.mas && gitClientId &&
+  publicationCapabilities(process.env.TW_PLUS_DESKTOP_GIT_PUBLICATION);
+const publishContract = publishCapabilities &&
+  loadPublicationContract(process.env.TW_PLUS_DESKTOP_GIT_PUBLICATION_MODULE_DIR, app.isPackaged);
+const publishJournal = publishContract && createPublicationJournal({
+  directory: app.getPath('userData'), clientId: gitClientId, safeStorage
+});
 if (plusRenderer) {
   const rendererRoot = path.join(__dirname, '../../dist-renderer-webpack/editor', rendererDirectory);
   const buildInfoPath = path.join(rendererRoot, 'build-info.json');
@@ -658,21 +687,30 @@ class EditorWindow extends ProjectRunningWindow {
     this.ipc.on('project-json-transfer-enabled', event => {
       event.returnValue = projectProcess.worker && projectJSONTransfer;
     });
-    const workspaceEnabled = projectProcess.worker && workspaceLayout;
-    this.ipc.on('workspace-layout-enabled', event => { event.returnValue = workspaceEnabled; });
-    if (workspaceEnabled) {
-      this.ipc.on('read-workspace-layout', event => {
-        try { event.returnValue = projectProcess.workspaceLayout.read(); }
-        catch (error) { event.returnValue = null; console.error(error.message); }
-      });
-      this.ipc.on('write-workspace-layout', (event, raw) => {
-        try { projectProcess.workspaceLayout.write(raw); }
-        catch (error) { console.error(error.message); }
-        finally { event.returnValue = null; }
-      });
-    }
+    // The editor keeps the Dockview layout of each SB3 under this key, with or without project isolation.
+    this.ipc.on('workspace-project-key', (event, id) => {
+      try {
+        const file = getFileById(id);
+        event.returnValue = file.type === TYPE_FILE ? workspaceProjectKey(file.path) : null;
+      } catch {
+        event.returnValue = null;
+      }
+    });
     const yamlEnabled = projectProcess.worker && externalYaml;
     this.ipc.on('external-yaml-enabled', event => { event.returnValue = yamlEnabled; });
+    const workspaceLayoutsEnabled = plusRenderer && yamlEnabled;
+    this.ipc.on('workspace-layouts-enabled', event => { event.returnValue = workspaceLayoutsEnabled; });
+    if (workspaceLayoutsEnabled) {
+      this.ipc.handle('read-dockview-layout', (_event, key) => {
+        if (!validDockviewKey(key)) throw new Error('Invalid workspace key.');
+        return projectProcess.workspaceLayouts.read(key);
+      });
+      this.ipc.handle('write-dockview-layout', (_event, key, layout) => {
+        if (!validDockviewKey(key)) throw new Error('Invalid workspace key.');
+        if (!validDockviewLayout(layout)) return false;
+        return projectProcess.workspaceLayouts.write(key, layout);
+      });
+    }
     if (yamlEnabled) {
       const yaml = new ExternalYamlFiles(projectProcess.yamlFiles);
       let selectingYaml = false;
@@ -734,11 +772,84 @@ class EditorWindow extends ProjectRunningWindow {
     });
 
     const editorURL = new URL(`tw-editor://./${rendererDirectory}/gui.html`);
-    if (gitStore) {
-      installEditorGit(this.ipc, this.window.webContents, {clientId: gitClientId, store: gitStore});
+    if (gitEnabled) {
+      installEditorGit(this.ipc, this.window.webContents, {
+        clientId: gitClientId, store: gitStore, githubApi: gitGitHubApi, promptPersonalToken: gitTokenPrompt,
+        gitCredentialHelper: credentialHelper,
+        publication: publishContract && {
+          capabilities: publishCapabilities, contract: publishContract, journal: publishJournal,
+          confirm: async (intent, login, signal) => {
+            const ja = settings.locale?.startsWith('ja');
+            const labels = ja ? {
+              pr: 'PR の作成', merge: 'PR の作成とマージ', noChecks: 'CI チェックがない場合のマージを許可',
+              link: '関連 Issue', create: '新規 Issue', close: 'マージ後に Issue をクローズ',
+              stack: '親 PR', stackBase: 'スタックの反映先',
+              stackMerge: '親と下位の PR がマージされた後、差分が一致し、新しい CI が通った場合にこの PR をマージ'
+            } : {
+              pr: 'Create pull request', merge: 'Create and merge pull request', noChecks: 'Allow merge without check runs',
+              link: 'Linked issue', create: 'New issue', close: 'Close issue after merge',
+              stack: 'Parent PR', stackBase: 'Stack target branch',
+              stackMerge: 'Merge this PR after all lower PRs have merged, the diff matches and fresh CI passes'
+            };
+            const {issue, stackParent} = intent;
+            const {response} = await dialog.showMessageBox(this.window, {
+              type: 'question', title: APP_NAME,
+              message: labels[intent.goal],
+              detail: [
+                login + ' → ' + intent.remote,
+                intent.head + ' (' + intent.commitOid + ') → ' + intent.base + ' (' + intent.baseOid + ')',
+                stackParent ? labels.stack + ' #' + stackParent.number + '\n' + labels.stackBase + ' ' + stackParent.targetBase : '',
+                stackParent && intent.goal === 'merge' ? labels.stackMerge : '',
+                intent.title, intent.body,
+                intent.allowNoChecks ? labels.noChecks : '',
+                issue ? ('number' in issue ? labels.link + ' #' + issue.number : labels.create + '\n' + issue.title + '\n' + issue.body) : '',
+                issue?.closeAfterMerge ? labels.close : ''
+              ].filter(Boolean).join('\n\n'),
+              buttons: ja ? ['キャンセル', '承認'] : ['Cancel', 'Approve'], cancelId: 0, defaultId: 0, noLink: true, signal
+            });
+            return response === 1;
+          }
+        },
+        confirmGitCredential: async ({owner, repo}, login, signal) => {
+          const {response} = await dialog.showMessageBox(this.window, {
+            type: 'question', title: APP_NAME,
+            message: 'Use saved GitHub credentials?',
+            detail: 'Account: ' + login + '\nRepository: github.com/' + owner + '/' + repo,
+            buttons: ['Cancel', 'Use Git credentials'], cancelId: 0, defaultId: 0, noLink: true, signal
+          });
+          return response === 1;
+        }
+      });
     } else {
       this.ipc.on('local-git-enabled', event => { event.returnValue = false; });
+      this.ipc.on('local-git-auth-enabled', event => { event.returnValue = false; });
+      this.ipc.on('local-git-publication-enabled', event => { event.returnValue = false; });
+      this.ipc.on('local-git-author-enabled', event => { event.returnValue = false; });
     }
+    installRepositoryCreation(this.ipc, this.window.webContents, creationContract && {
+      clientId: creationClientId, contract: creationContract, journal: creationJournal,
+      confirmCreate: async ({owner, name, visibility, description, account}, signal) => {
+        const ja = settings.locale?.startsWith('ja');
+        const visibilityLabel = visibility === 'private' ? (ja ? '非公開' : 'Private') : (ja ? '公開' : 'Public');
+        const {response} = await dialog.showMessageBox(this.window, {
+          type: 'question', title: APP_NAME,
+          message: ja ? 'GitHub リポジトリを作成しますか？' : 'Create this GitHub repository?',
+          detail: `${account} → github.com/${owner}/${name}\n${visibilityLabel}\n${description}`,
+          buttons: ja ? ['キャンセル', '作成'] : ['Cancel', 'Create'], cancelId: 0, defaultId: 0, noLink: true, signal
+        });
+        return response === 1;
+      },
+      confirmAdoption: async ({owner, name, id, account}, signal) => {
+        const ja = settings.locale?.startsWith('ja');
+        const {response} = await dialog.showMessageBox(this.window, {
+          type: 'question', title: APP_NAME,
+          message: ja ? 'この空の GitHub リポジトリで作成を再開しますか？' : 'Continue with this empty GitHub repository?',
+          detail: `${account} → github.com/${owner}/${name} (ID ${id})`,
+          buttons: ja ? ['キャンセル', '再開'] : ['Cancel', 'Continue'], cancelId: 0, defaultId: 0, noLink: true, signal
+        });
+        return response === 1;
+      }
+    });
     this.ipc.on('editor-popouts-enabled', event => { event.returnValue = editorPopouts.size > 0; });
     if (editorPopouts.size) {
       this.handleEditorPopout = installEditorPopouts(this, editorURL, editorPopouts);

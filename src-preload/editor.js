@@ -1,22 +1,57 @@
 const {contextBridge, ipcRenderer} = require('electron');
 
+const localGit = {
+  getConnection: () => ipcRenderer.invoke('local-git-connection'),
+  getState: () => ipcRenderer.invoke('local-git-state'),
+  begin: (remember = false) => ipcRenderer.invoke('local-git-begin', remember),
+  finish: () => ipcRenderer.invoke('local-git-finish'),
+  restore: () => ipcRenderer.invoke('local-git-restore'),
+  authorizeRepository: (remote, write = false, review = false) =>
+    ipcRenderer.invoke('local-git-authorize', remote, write, review),
+  getSession: () => ipcRenderer.invoke('local-git-session'),
+  disconnect: () => ipcRenderer.invoke('local-git-disconnect')
+};
+
 contextBridge.exposeInMainWorld('EditorPreload', {
-  localGit: ipcRenderer.sendSync('local-git-enabled') === true ? {
-    getConnection: () => ipcRenderer.invoke('local-git-connection'),
-    getState: () => ipcRenderer.invoke('local-git-state'),
-    begin: (remember = false) => ipcRenderer.invoke('local-git-begin', remember),
-    finish: () => ipcRenderer.invoke('local-git-finish'),
-    restore: () => ipcRenderer.invoke('local-git-restore'),
-    authorizeRepository: (remote, write = false) => ipcRenderer.invoke('local-git-authorize', remote, write),
-    getSession: () => ipcRenderer.invoke('local-git-session'),
-    disconnect: () => ipcRenderer.invoke('local-git-disconnect')
+  ...(ipcRenderer.sendSync('local-git-author-enabled') === true && {
+    localGitAuthor: () => ipcRenderer.invoke('local-git-author')
+  }),
+  localGit: ipcRenderer.sendSync('local-git-enabled') === true ? localGit : null,
+  localGitAuth: ipcRenderer.sendSync('local-git-auth-enabled') === true ? {
+    ...localGit,
+    getAuthMethods: remote => ipcRenderer.invoke('local-git-auth-methods', remote),
+    connectPersonalAccessToken: (remote, remember = false) =>
+      ipcRenderer.invoke('local-git-connect-personal-access-token', remote, remember),
+    connectGitCredential: (remote, login) => ipcRenderer.invoke('local-git-connect-git-credential', remote, login)
+  } : null,
+  localGitCreation: ipcRenderer.sendSync('local-git-creation-enabled') === true ? {
+    getConnection: () => ipcRenderer.invoke('local-git-creation-connection'),
+    begin: () => ipcRenderer.invoke('local-git-creation-begin'),
+    finish: () => ipcRenderer.invoke('local-git-creation-finish'),
+    getGrant: () => ipcRenderer.invoke('local-git-creation-grant'),
+    authorizeInitialPush: (operationId, repositoryId) => ipcRenderer.invoke('local-git-creation-initial-push', operationId, repositoryId),
+    revokeInitialPush: (operationId, repositoryId, bearer) =>
+      ipcRenderer.invoke('local-git-creation-revoke-initial-push', operationId, repositoryId, bearer),
+    inspectUnknown: operationId => ipcRenderer.invoke('local-git-creation-inspect-unknown', operationId),
+    inspectCreation: operationId => ipcRenderer.invoke('local-git-creation-inspect-operation', operationId),
+    adoptUnknown: (operationId, repositoryId) => ipcRenderer.invoke('local-git-creation-adopt-unknown', operationId, repositoryId),
+    disconnect: () => ipcRenderer.invoke('local-git-creation-disconnect')
+  } : null,
+  localGitPublication: ipcRenderer.sendSync('local-git-publication-enabled') === true ? {
+    capabilities: () => ipcRenderer.invoke('local-git-publication-capabilities'),
+    repository: remote => ipcRenderer.invoke('local-git-publication-repository', remote),
+    stackParent: (remote, number) => ipcRenderer.invoke('local-git-publication-stack-parent', remote, number),
+    enqueue: intent => ipcRenderer.invoke('local-git-publication-enqueue', intent),
+    get: target => ipcRenderer.invoke('local-git-publication-get', target),
+    advance: target => ipcRenderer.invoke('local-git-publication-advance', target)
   } : null,
   ...(ipcRenderer.sendSync('editor-popouts-enabled') === true && {
     reservePopout: (kind, ticket) => ipcRenderer.sendSync('reserve-editor-popout', kind, ticket)
   }),
-  workspaceLayout: ipcRenderer.sendSync('workspace-layout-enabled') === true ? {
-    read: () => ipcRenderer.sendSync('read-workspace-layout'),
-    write: raw => { ipcRenderer.sendSync('write-workspace-layout', raw); }
+  workspaceProjectKey: (id) => ipcRenderer.sendSync('workspace-project-key', id),
+  workspaceLayouts: ipcRenderer.sendSync('workspace-layouts-enabled') === true ? {
+    read: key => ipcRenderer.invoke('read-dockview-layout', key),
+    write: (key, layout) => ipcRenderer.invoke('write-dockview-layout', key, layout)
   } : null,
   externalYaml: ipcRenderer.sendSync('external-yaml-enabled') === true ? {
     open: () => ipcRenderer.invoke('open-external-yaml'),

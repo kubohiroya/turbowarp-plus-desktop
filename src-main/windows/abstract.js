@@ -1,4 +1,4 @@
-const { BrowserWindow, screen, session } = require('electron');
+const { app, BrowserWindow, screen, session } = require('electron');
 const path = require('path');
 const openExternal = require('../open-external');
 const settings = require('../settings');
@@ -188,10 +188,10 @@ class AbstractWindow {
 
     options.backgroundColor = this.getBackgroundColor();
 
-    // On Linux the icon doesn't get baked into the executable as it does on other platforms
-    if (process.platform === 'linux') {
-      // This path won't work in development but it will work in production
-      options.icon = path.resolve(__dirname, '../../../icon.png');
+    if (process.platform === 'linux' || (process.platform === 'win32' && !app.isPackaged)) {
+      options.icon = app.isPackaged
+        ? path.join(process.resourcesPath, 'icon.png')
+        : path.resolve(__dirname, '../../art/icon.png');
     }
 
     return options;
