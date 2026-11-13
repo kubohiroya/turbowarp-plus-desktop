@@ -1,4 +1,4 @@
-const {randomBytes} = require('node:crypto');
+const {createHash, randomBytes} = require('node:crypto');
 const {createGitHubAuth, GitServiceError} = require('./github-auth');
 const {parseRemote, startGitProxy} = require('./git-proxy');
 const {applyResult, clearReviewRecords, createReviewRecords, reserveReview, reserveStep} = require('./review-submits');
@@ -276,6 +276,26 @@ async function startDesktopGit ({
         pushIds: new Set(), reviews: createReviewRecords()
       };
       return publicSession;
+    },
+    /** Main-process capability. Publication never receives a normal renderer bearer as authority. */
+    async authorizePublication (remoteUrl, repositoryId) {
+      const selected = session;
+      const remote = parseRemote(remoteUrl);
+      if (closed || !clientId || localToken || !selected?.write || expired(selected) ||
+          (repositoryId !== undefined && repositoryId !== selected.repository.id) || !sameRemote(remote, selected.remote)) {
+        throw new GitServiceError(403, 'FORBIDDEN');
+      }
+      const {signal} = selected.controller;
+      const {accessToken, account} = await github.getCredentials();
+      signal.throwIfAborted();
+      const verified = await repository(selected.repository, true, accessToken, signal, true);
+      signal.throwIfAborted();
+      if (selected !== session || expired(selected) || verified.id !== selected.repository.id ||
+          account.login.toLowerCase() !== selected.public.account.login.toLowerCase()) {
+        throw new GitServiceError(403, 'FORBIDDEN');
+      }
+      const pushSessionId = createHash('sha256').update(selected.public.bearer).digest('hex');
+      return {repositoryId: verified.id, accessToken, account, signal, pushSessionId};
     },
     getSession () {
       return session && !tokenReauthRequired && !expired(session) ? session.public : null;

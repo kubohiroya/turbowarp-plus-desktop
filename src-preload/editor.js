@@ -13,6 +13,9 @@ const localGit = {
 };
 
 contextBridge.exposeInMainWorld('EditorPreload', {
+  ...(ipcRenderer.sendSync('local-git-author-enabled') === true && {
+    localGitAuthor: () => ipcRenderer.invoke('local-git-author')
+  }),
   localGit: ipcRenderer.sendSync('local-git-enabled') === true ? localGit : null,
   localGitAuth: ipcRenderer.sendSync('local-git-auth-enabled') === true ? {
     ...localGit,
@@ -20,6 +23,27 @@ contextBridge.exposeInMainWorld('EditorPreload', {
     connectPersonalAccessToken: (remote, remember = false) =>
       ipcRenderer.invoke('local-git-connect-personal-access-token', remote, remember),
     connectGitCredential: (remote, login) => ipcRenderer.invoke('local-git-connect-git-credential', remote, login)
+  } : null,
+  localGitCreation: ipcRenderer.sendSync('local-git-creation-enabled') === true ? {
+    getConnection: () => ipcRenderer.invoke('local-git-creation-connection'),
+    begin: () => ipcRenderer.invoke('local-git-creation-begin'),
+    finish: () => ipcRenderer.invoke('local-git-creation-finish'),
+    getGrant: () => ipcRenderer.invoke('local-git-creation-grant'),
+    authorizeInitialPush: (operationId, repositoryId) => ipcRenderer.invoke('local-git-creation-initial-push', operationId, repositoryId),
+    revokeInitialPush: (operationId, repositoryId, bearer) =>
+      ipcRenderer.invoke('local-git-creation-revoke-initial-push', operationId, repositoryId, bearer),
+    inspectUnknown: operationId => ipcRenderer.invoke('local-git-creation-inspect-unknown', operationId),
+    inspectCreation: operationId => ipcRenderer.invoke('local-git-creation-inspect-operation', operationId),
+    adoptUnknown: (operationId, repositoryId) => ipcRenderer.invoke('local-git-creation-adopt-unknown', operationId, repositoryId),
+    disconnect: () => ipcRenderer.invoke('local-git-creation-disconnect')
+  } : null,
+  localGitPublication: ipcRenderer.sendSync('local-git-publication-enabled') === true ? {
+    capabilities: () => ipcRenderer.invoke('local-git-publication-capabilities'),
+    repository: remote => ipcRenderer.invoke('local-git-publication-repository', remote),
+    stackParent: (remote, number) => ipcRenderer.invoke('local-git-publication-stack-parent', remote, number),
+    enqueue: intent => ipcRenderer.invoke('local-git-publication-enqueue', intent),
+    get: target => ipcRenderer.invoke('local-git-publication-get', target),
+    advance: target => ipcRenderer.invoke('local-git-publication-advance', target)
   } : null,
   ...(ipcRenderer.sendSync('editor-popouts-enabled') === true && {
     reservePopout: (kind, ticket) => ipcRenderer.sendSync('reserve-editor-popout', kind, ticket)

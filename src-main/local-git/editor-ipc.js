@@ -1,12 +1,20 @@
 const {GitServiceError} = require('./github-auth');
 const {startDesktopGit, PERSONAL_TOKEN, GIT_CREDENTIAL_HELPER} = require('./service');
 const {parseRemote} = require('./git-proxy');
+const {createDesktopPublication} = require('./publication');
+const {readGlobalGitAuthor} = require('./global-author');
 
 const EDITOR_DOCUMENT = 'tw-editor://./plus-gui/gui.html';
 let active = null;
 
+function isTrustedEditorGitEvent (event, webContents) {
+  return event.sender === webContents && event.senderFrame === webContents.mainFrame &&
+    typeof event.senderFrame?.url === 'string' && event.senderFrame.url.split(/[?#]/u, 1)[0] === EDITOR_DOCUMENT;
+}
+
 function installEditorGit (ipc, webContents, {
-  clientId, store, githubApi, promptPersonalToken, gitCredentialHelper, confirmGitCredential
+  clientId, store, githubApi, promptPersonalToken, gitCredentialHelper, confirmGitCredential, publication,
+  readAuthor = readGlobalGitAuthor
 }) {
   const methods = [];
   if (clientId) methods.push('github-app');
@@ -14,8 +22,7 @@ function installEditorGit (ipc, webContents, {
   const hasGitCredentialHelper = !!(gitCredentialHelper && confirmGitCredential);
 
   function trusted (event) {
-    return event.sender === webContents && event.senderFrame === webContents.mainFrame &&
-      typeof event.senderFrame?.url === 'string' && event.senderFrame.url.split(/[?#]/u, 1)[0] === EDITOR_DOCUMENT;
+    return isTrustedEditorGitEvent(event, webContents);
   }
 
   async function getService (start) {
@@ -62,6 +69,7 @@ function installEditorGit (ipc, webContents, {
   }
 
   ipc.on('local-git-enabled', event => { event.returnValue = !!clientId && trusted(event); });
+  ipc.on('local-git-author-enabled', event => { event.returnValue = trusted(event); });
   ipc.on('local-git-auth-enabled', event => {
     event.returnValue = (methods.length > 0 || hasGitCredentialHelper) && trusted(event);
   });
@@ -74,6 +82,20 @@ function installEditorGit (ipc, webContents, {
         error?.name === 'AbortError' ? 'ABORTED' : 'GIT_UNAVAILABLE');
     }
   });
+  handle('author', () => readAuthor());
+  const publicationEnabled = Boolean(clientId && publication);
+  ipc.on('local-git-publication-enabled', event => { event.returnValue = publicationEnabled && trusted(event); });
+  if (publicationEnabled) {
+    const adapter = createDesktopPublication({...publication, async authorize (remote, repositoryId) {
+      return (await getService(false))?.authorizePublication(remote, repositoryId) ?? null;
+    }});
+    handle('publication-capabilities', adapter.capabilities);
+    handle('publication-repository', adapter.repository);
+    handle('publication-stack-parent', adapter.stackParent);
+    handle('publication-enqueue', adapter.enqueue);
+    handle('publication-get', adapter.get);
+    handle('publication-advance', adapter.advance);
+  }
   handle('auth-methods', async remote => {
     if (hasGitCredentialHelper && remote !== undefined && await gitCredentialHelper.available(parseRemote(remote))) {
       return [...methods, GIT_CREDENTIAL_HELPER];
@@ -124,4 +146,4 @@ function installEditorGit (ipc, webContents, {
   webContents.once('destroyed', close);
 }
 
-module.exports = {installEditorGit};
+module.exports = {installEditorGit, isTrustedEditorGitEvent};
