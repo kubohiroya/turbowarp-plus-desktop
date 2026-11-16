@@ -6,7 +6,7 @@ const os = require('node:os');
 const {EventEmitter} = require('node:events');
 const {createAgentStore, createAiAgents, readBranch, launchPlan, FILE_NAME} = require('../src-main/ai-agents');
 
-async function setup (t, {platform = 'linux', confirm = true} = {}) {
+async function setup (t, {platform = 'linux', confirm = true, sandboxed = false} = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tw-ai-agents-')));
   t.after(() => fs.rm(root, {recursive: true, force: true}));
   const app = path.join(root, 'agent');
@@ -35,6 +35,7 @@ async function setup (t, {platform = 'linux', confirm = true} = {}) {
     store: createAgentStore(path.join(root, 'data')),
     spawn,
     platform,
+    sandboxed,
     env: {PATH: '/bin', ELECTRON_RUN_AS_NODE: '1', TW_PLUS_DESKTOP_AI_AGENTS: '1'},
     locale: () => 'ja',
     dialogs: {
@@ -210,6 +211,23 @@ test('only applications that start without a shell are accepted', async t => {
   assert.equal(launchPlan('win32', script), null);
   assert.equal(launchPlan('linux', plain), null);
   assert.equal(launchPlan('linux', 'relative/app'), null);
+  // The Mac App Store sandbox accepts bundles only.
+  const tool = path.join(root, 'tool');
+  await fs.writeFile(tool, '', {mode: 0o755});
+  assert.deepEqual(launchPlan('darwin', tool), {kind: 'executable'});
+  assert.equal(launchPlan('darwin', tool, true), null);
+  assert.deepEqual(launchPlan('darwin', bundle, true), {kind: 'bundle'});
+});
+
+test('the Mac App Store build launches a bundle and refuses a plain executable', async t => {
+  const {agents, root, calls, answers} = await setup(t, {platform: 'darwin', sandboxed: true});
+  assert.deepEqual(await agents.chooseApp(), {ok: false, code: 'app-missing'});
+  const bundle = path.join(root, 'Claude.app');
+  await fs.mkdir(bundle);
+  answers.file = bundle;
+  await addEntry(agents, {args: ['--new'], cwd: root});
+  assert.deepEqual(await agents.launch('claude'), {ok: true, value: null});
+  assert.equal(calls.spawn[0].command, '/usr/bin/open');
 });
 
 test('a macOS bundle starts through open with the arguments after --args', async t => {
@@ -233,4 +251,18 @@ test('a damaged settings file lists nothing and keeps a revision for the next sa
   assert.deepEqual(listed.entries, []);
   assert.match(listed.revision, /^[0-9a-f]{64}$/u);
   assert.deepEqual(value(await agents.save(listed.revision, [])).entries, []);
+});
+
+test('the Plus renderer launches applications by default, and TW_PLUS_DESKTOP_AI_AGENTS=0 turns it off', () => {
+  const {execFileSync} = require('node:child_process');
+  const flag = value => {
+    const env = {...process.env, TW_PLUS_DESKTOP_RENDERER: '1'};
+    delete env.TW_PLUS_DESKTOP_AI_AGENTS;
+    if (value !== undefined) env.TW_PLUS_DESKTOP_AI_AGENTS = value;
+    return execFileSync(process.execPath, ['-p', "require('./config/feature-flags').aiAgents"],
+      {cwd: path.join(__dirname, '..'), env, encoding: 'utf8'}).trim();
+  };
+  assert.equal(flag(undefined), 'true');
+  assert.equal(flag('1'), 'true');
+  assert.equal(flag('0'), 'false');
 });
