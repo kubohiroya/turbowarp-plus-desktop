@@ -40,8 +40,8 @@ test('the launcher stores one bounded layout per project across restarts', async
   const store = createDockviewLayoutStore(root);
   assert.equal(store.read(first), null);
   assert.throws(() => store.read('../project'), /Invalid workspace key/);
-  assert.equal(store.write(first, '{"version":1}'), true);
-  assert.equal(store.write(second, '{"version":1,"project":"B"}'), true);
+  assert.equal(typeof store.write(first, '{"version":1}'), 'number');
+  assert.equal(typeof store.write(second, '{"version":1,"project":"B"}'), 'number');
   assert.equal(store.write(first, 'a'.repeat(256 * 1024 + 1)), false);
   const reopened = createDockviewLayoutStore(root);
   assert.equal(reopened.read(first), '{"version":1}');
@@ -62,5 +62,42 @@ test('the launcher retains only the 100 most recently used project layouts', asy
   store.write(key(100), '{}');
   assert.equal(store.read(key(0)), '{}');
   assert.equal(store.read(key(1)), null);
-  assert.equal((await fs.readdir(directory)).length, 100);
+  const files = await fs.readdir(directory);
+  assert.equal(files.filter(file => file.endsWith('.json')).length, 100);
+  assert.equal(files.filter(file => file.endsWith('.saved-at')).length, 100);
+  assert.equal(files.includes(key(1) + '.saved-at'), false);
+});
+
+test('the launcher reports when a layout last changed, not when it was opened', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-dockview-layout-'));
+  t.after(() => fs.rm(root, {recursive: true, force: true}));
+  const key = 'c'.repeat(64);
+  const store = createDockviewLayoutStore(root);
+  assert.equal(store.readRecord(key), null);
+  assert.equal(store.write(key, '{"version":1}', 1000), 1000);
+  assert.deepEqual(store.readRecord(key), {layout: '{"version":1}', savedAt: 1000});
+  // An unchanged layout keeps its time.
+  assert.equal(store.write(key, '{"version":1}', 2000), 1000);
+  assert.deepEqual(createDockviewLayoutStore(root).readRecord(key), {layout: '{"version":1}', savedAt: 1000});
+  assert.equal(store.write(key, '{"version":2}', 3000), 3000);
+  assert.deepEqual(store.readRecord(key), {layout: '{"version":2}', savedAt: 3000});
+  assert.equal(store.write(key, 'a'.repeat(256 * 1024 + 1), 4000), false);
+  assert.deepEqual(store.readRecord(key), {layout: '{"version":2}', savedAt: 3000});
+});
+
+test('a layout saved by an earlier version has no time until it changes', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-dockview-layout-'));
+  t.after(() => fs.rm(root, {recursive: true, force: true}));
+  const key = 'd'.repeat(64);
+  const directory = path.join(root, 'dockview-layouts');
+  await fs.mkdir(directory);
+  await fs.writeFile(path.join(directory, key + '.json'), '{"version":1}');
+  const store = createDockviewLayoutStore(root);
+  assert.deepEqual(store.readRecord(key), {layout: '{"version":1}'});
+  assert.equal(store.write(key, '{"version":1}', 1000), true);
+  assert.deepEqual(store.readRecord(key), {layout: '{"version":1}'});
+  await fs.writeFile(path.join(directory, key + '.saved-at'), 'not a time');
+  assert.deepEqual(store.readRecord(key), {layout: '{"version":1}'});
+  assert.equal(store.write(key, '{"version":2}', 2000), 2000);
+  assert.deepEqual(store.readRecord(key), {layout: '{"version":2}', savedAt: 2000});
 });

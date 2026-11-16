@@ -5,6 +5,7 @@
 - `EditorPreload.workspaceProjectKey(id)` は、Editor が開いているファイルの ID（Redux の `fileHandle.id`）を受け取り、そのファイルの正規化したパスの SHA-256 を返す。パスそのものはレンダラーに渡さない。URL やサンプルから開いた作品には `null` を返し、Editor は作品名とスプライトで見分ける。
 - Plus renderer で作品分離（`TW_PLUS_DESKTOP_PROJECT_ISOLATION=1`）と外部 YAML（`TW_PLUS_DESKTOP_EXTERNAL_YAML=1`）を有効にすると、起動係が `dockview-layouts` に保存する。読み書きは、その時点で SB3 のロックを持つ作品プロセスに限る。一時プロファイルの削除は従来どおり行う。
 - 以前の版がユーザーデータの `workspace-layouts` に保存していた配置は、起動時に読まずに削除する。移行はしない。
+- 配置を変えた時刻（エポックからのミリ秒）を、配置の隣の `<key>.saved-at` に保存する。`workspaceLayouts.readRecord(key)` は `{layout, savedAt}` を返し、`write` は成功すると保存時刻を返す。作品を開いただけでは時刻は変わらない（開いた時刻は配置ファイルの更新時刻に記録し、古い作品を消す順に使う）。Editor はこの時刻と SB3 の `tw-plus/workspace.json` の時刻を比べ、新しいほうの画面を復元する。時刻を持たない以前の版の配置は、SB3 の画面より古いものとして扱う。
 - 作品あたり256 KiBまで、最近使った100作品分を保持する。レイアウトを作る条件は Workbench の README の「Dockview のレイアウトの保存」に従う。
 
 ## 採用版の記録
