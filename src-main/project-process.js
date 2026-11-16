@@ -290,7 +290,7 @@ const stageTransferAsset = (kind, bytes) => {
 };
 
 module.exports = {
-  bootstrap, worker, open, reserve, cancel, commit, detach, verify, ready, stageTransferAsset,
+  bootstrap, worker, dataRoot, open, reserve, cancel, commit, detach, verify, ready, stageTransferAsset,
   workspaceLayouts: {
     read(key) {
       verify(activeLease);
