@@ -53,8 +53,12 @@ const publicEntry = ({id, name, application, args, cwd, url}) =>
 const sameLaunch = (a, b) => a.application === b.application && a.cwd === b.cwd &&
   JSON.stringify(a.args) === JSON.stringify(b.args);
 
-/** How to start an application on this platform, or null when it cannot be started without a shell. */
-function launchPlan (platform, application) {
+/**
+ * How to start an application on this platform, or null when it cannot be started without a shell.
+ * In the Mac App Store sandbox a process started directly stays in the sandbox and cannot run another
+ * application's code, so only bundles are accepted there. LaunchServices starts them outside the sandbox.
+ */
+function launchPlan (platform, application, sandboxed = false) {
   if (!path.isAbsolute(application)) return null;
   let stat;
   try {
@@ -66,7 +70,7 @@ function launchPlan (platform, application) {
     // `open` hands the arguments to the bundle. It does not take a working directory.
     return stat.isDirectory() ? {kind: 'bundle'} : null;
   }
-  if (!stat.isFile()) return null;
+  if (!stat.isFile() || (platform === 'darwin' && sandboxed)) return null;
   if (platform === 'win32') return /\.exe$/iu.test(application) ? {kind: 'executable'} : null;
   try {
     fs.accessSync(application, fs.constants.X_OK);
@@ -198,7 +202,8 @@ function createAgentStore (directory) {
  * - dialogs.chooseFile(title) / dialogs.chooseDirectory(title): an absolute path or null.
  * - dialogs.confirm({title, message, detail, allow, cancel}): true when the user allows.
  */
-function createAiAgents ({store, dialogs, spawn, platform = process.platform, env = process.env, locale = () => 'en'}) {
+function createAiAgents ({store, dialogs, spawn, platform = process.platform, sandboxed = Boolean(process.mas),
+  env = process.env, locale = () => 'en'}) {
   const selections = new Map();
   const context = {projectFolder: null, repository: null};
   let busy = false;
@@ -278,7 +283,7 @@ function createAiAgents ({store, dialogs, spawn, platform = process.platform, en
     chooseApp: exclusive(async () => {
       const application = await dialogs.chooseFile(strings(locale()).chooseApp);
       if (!application) return null;
-      if (!launchPlan(platform, application)) fail('app-missing');
+      if (!launchPlan(platform, application, sandboxed)) fail('app-missing');
       const selection = randomUUID();
       selections.set(selection, application);
       return {selection, application};
@@ -323,7 +328,7 @@ function createAiAgents ({store, dialogs, spawn, platform = process.platform, en
       const args = entry.args.map(arg => expand(arg, values));
       const cwd = expand(entry.cwd.trim() || DEFAULT_DIRECTORY, values);
       if (!path.isAbsolute(cwd) || !fs.statSync(cwd, {throwIfNoEntry: false})?.isDirectory()) fail('invalid-directory');
-      const plan = launchPlan(platform, entry.application);
+      const plan = launchPlan(platform, entry.application, sandboxed);
       if (!plan) fail('app-missing');
       const failure = await start(entry, plan, args, cwd);
       if (failure) fail(failure);

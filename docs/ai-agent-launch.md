@@ -1,10 +1,11 @@
 # AI エージェントのアプリ起動
 
-[Editor #478](https://github.com/kubohiroya/turbowarp-plus-editor/issues/478) の (b) の 4 と (c) のうち、Desktop でアプリを起動する部分（#38）。Plus renderer では既定で有効。`TW_PLUS_DESKTOP_AI_AGENTS=0` を指定して起動すると無効になる。Mac App Store 版では使えない。
+[Editor #478](https://github.com/kubohiroya/turbowarp-plus-editor/issues/478) の (b) の 4 と (c) のうち、Desktop でアプリを起動する部分（#38）。Plus renderer では既定で有効。`TW_PLUS_DESKTOP_AI_AGENTS=0` を指定して起動すると無効になる。
 
 ## 使い方
 
 - TurboWarp Plus アイコンのメニュー「AI エージェント設定…」の「デスクトップアプリ」で、アプリを追加する。アプリは「選択…」から OS のファイル選択で選ぶ。macOS は `.app`、Windows は `.exe`、Linux は実行できるファイルに限る。`.bat`・`.cmd`・`.lnk`・`.desktop` などシェルや別の仕組みを通すものは受け付けない。
+- Mac App Store 版は `.app` だけを受け付ける。サンドボックスの中から直接起動したプロセスはサンドボックスに入ったままで、ほかのアプリのコードを実行できないため。`.app` は `open -a` を通じて LaunchServices が起動するので、サンドボックスの外で動く。
 - 引数は 1 行に 1 つ。`{projectFolder}`・`{repository}`・`{branch}` を置き換える。値は同じ節の「プロジェクトフォルダを選択…」「Git リポジトリを選択…」で、OS のフォルダ選択から決める。プロジェクトフォルダが Git の作業ツリーの中にあれば、そのリポジトリも選ぶ。`{branch}` は `.git/HEAD` から読み、detached HEAD では値がない。
 - 作業ディレクトリの既定は `{projectFolder}`。macOS の `.app` は `open -a` で起動するので、作業ディレクトリはアプリに渡らない。
 - 保存すると、追加した項目と、アプリ・引数・作業ディレクトリを変えた項目を OS の確認ダイアログに並べる。「許可して保存」を選んだときだけ保存する。名前・並び順・代わりに開く Web サイトの変更は、確認を出さずに保存する。

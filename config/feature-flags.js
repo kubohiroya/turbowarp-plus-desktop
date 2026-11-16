@@ -21,7 +21,7 @@ exports.projectJSONTransfer = process.env.TW_PLUS_DESKTOP_JSON_TRANSFER === '1';
 exports.projectAssetTransfer = exports.projectJSONTransfer && process.env.TW_PLUS_DESKTOP_ASSET_TRANSFER === '1';
 exports.externalYaml = exports.projectIsolation && process.env.TW_PLUS_DESKTOP_EXTERNAL_YAML === '1';
 // Launching desktop applications from the AI agent menu. On by default; `TW_PLUS_DESKTOP_AI_AGENTS=0` turns it off.
-// The Mac App Store sandbox cannot start other applications.
-exports.aiAgents = exports.plusRenderer && !process.mas && process.env.TW_PLUS_DESKTOP_AI_AGENTS !== '0';
+// The Mac App Store build launches application bundles only (see src-main/ai-agents.js).
+exports.aiAgents = exports.plusRenderer && process.env.TW_PLUS_DESKTOP_AI_AGENTS !== '0';
 exports.gitPersonalAccessToken = process.env.TW_PLUS_DESKTOP_GIT_PERSONAL_ACCESS_TOKEN !== '0';
 exports.gitCredentialHelper = process.env.TW_PLUS_DESKTOP_GIT_CREDENTIAL_HELPER !== '0';
