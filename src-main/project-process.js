@@ -128,11 +128,13 @@ const launcher = () => {
                   active = null;
                 }
                 reply(true);
-              } else if (layouts && (command === 'read-dockview-layout' || command === 'write-dockview-layout')) {
+              } else if (layouts && (command === 'read-dockview-layout' || command === 'read-dockview-layout-record' ||
+                command === 'write-dockview-layout')) {
                 // A worker can only access the layout for the SB3 it currently has locked.
                 if (!active || args.key !== hashWorkspaceKey(active.key)) throw new Error('No project lock for this layout.');
-                reply(command === 'read-dockview-layout' ?
-                  layouts.read(args.key) : layouts.write(args.key, args.layout));
+                reply(command === 'read-dockview-layout' ? layouts.read(args.key) :
+                  command === 'read-dockview-layout-record' ? layouts.readRecord(args.key) :
+                    layouts.write(args.key, args.layout));
               } else if (yamlLocks && command === 'reserve-yaml') {
                 if (!isYaml(args.file) || !path.isAbsolute(args.file)) throw new Error('Select a YAML file.');
                 const identity = identify(args.file);
@@ -293,6 +295,10 @@ module.exports = {
     read(key) {
       verify(activeLease);
       return request('read-dockview-layout', {key});
+    },
+    readRecord(key) {
+      verify(activeLease);
+      return request('read-dockview-layout-record', {key});
     },
     write(key, layout) {
       verify(activeLease);

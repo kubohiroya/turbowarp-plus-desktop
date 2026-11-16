@@ -705,6 +705,10 @@ class EditorWindow extends ProjectRunningWindow {
         if (!validDockviewKey(key)) throw new Error('Invalid workspace key.');
         return projectProcess.workspaceLayouts.read(key);
       });
+      this.ipc.handle('read-dockview-layout-record', (_event, key) => {
+        if (!validDockviewKey(key)) throw new Error('Invalid workspace key.');
+        return projectProcess.workspaceLayouts.readRecord(key);
+      });
       this.ipc.handle('write-dockview-layout', (_event, key, layout) => {
         if (!validDockviewKey(key)) throw new Error('Invalid workspace key.');
         if (!validDockviewLayout(layout)) return false;
