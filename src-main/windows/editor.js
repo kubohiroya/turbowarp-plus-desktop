@@ -13,7 +13,7 @@ const AboutWindow = require('./about');
 const PackagerWindow = require('./packager');
 const {createAtomicWriteStream} = require('../atomic-write-stream');
 const {assertStandardRendererCanOverwrite, denialCode} = require('../standard-renderer-save');
-const {translate, updateLocale, getStrings} = require('../l10n');
+const {translate, updateLocale, getStrings, getLocale} = require('../l10n');
 const {APP_NAME} = require('../brand');
 const prompts = require('../prompts');
 const settings = require('../settings');
@@ -27,6 +27,7 @@ const {isSB3} = require('../project-lock');
 const {workspaceProjectKey} = require('../workspace-project-key');
 const {validDockviewLayout, validDockviewKey} = require('../dockview-layout-store');
 const {ExternalYamlFiles} = require('../external-yaml-files');
+const {createAgentStore, createAiAgents} = require('../ai-agents');
 const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
 const {installRepositoryCreation, loadCreationContract} = require('../local-git/repository-creation-ipc');
@@ -37,7 +38,7 @@ const {createGitCredentialHelper} = require('../local-git/git-credential-helper'
 const {PERSONAL_TOKEN} = require('../local-git/service');
 const {installEditorPopouts, isReservedPopout} = require('./editor-popouts');
 const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml,
-  gitPersonalAccessToken, gitCredentialHelper} =
+  gitPersonalAccessToken, gitCredentialHelper, aiAgents} =
   require('../../config/feature-flags');
 
 const rendererDirectory = plusRenderer ? 'plus-gui' : 'gui';
@@ -64,6 +65,8 @@ const publishContract = publishCapabilities &&
 const publishJournal = publishContract && createPublicationJournal({
   directory: app.getPath('userData'), clientId: gitClientId, safeStorage
 });
+// Every editor window and project process shares one list, kept beside the shared Desktop settings.
+const agentStore = aiAgents ? createAgentStore(projectProcess.dataRoot) : null;
 if (plusRenderer) {
   const rendererRoot = path.join(__dirname, '../../dist-renderer-webpack/editor', rendererDirectory);
   const buildInfoPath = path.join(rendererRoot, 'build-info.json');
@@ -739,6 +742,31 @@ class EditorWindow extends ProjectRunningWindow {
       this.window.webContents.on('did-navigate', () => {
         void yaml.closeAll().catch(error => console.error(error.message));
       });
+    }
+    this.ipc.on('ai-agents-enabled', event => { event.returnValue = agentStore !== null; });
+    if (agentStore) {
+      const choose = async (title, properties, defaultPath) => {
+        const result = await dialog.showOpenDialog(this.window, {title, properties, defaultPath});
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      };
+      const agents = createAiAgents({
+        store: agentStore,
+        spawn: require('node:child_process').spawn,
+        locale: getLocale,
+        dialogs: {
+          chooseFile: title => choose(title, ['openFile'], process.platform === 'darwin' ? '/Applications' : undefined),
+          chooseDirectory: title => choose(title, ['openDirectory']),
+          confirm: async ({title, message, detail, allow, cancel}) => (await dialog.showMessageBox(this.window, {
+            type: 'warning', title, message, detail, buttons: [allow, cancel], defaultId: 1, cancelId: 1, noLink: true
+          })).response === 0
+        }
+      });
+      this.ipc.handle('ai-agents-list', () => agents.list());
+      this.ipc.handle('ai-agents-context', () => agents.context());
+      this.ipc.handle('ai-agents-choose-context', (_event, kind) => agents.chooseContext(kind));
+      this.ipc.handle('ai-agents-choose-app', () => agents.chooseApp());
+      this.ipc.handle('ai-agents-save', (_event, revision, entries) => agents.save(revision, entries));
+      this.ipc.handle('ai-agents-launch', (_event, id) => agents.launch(id));
     }
     const assetsEnabled = projectProcess.worker && projectAssetTransfer;
     this.ipc.on('project-asset-transfer-enabled', event => { event.returnValue = assetsEnabled; });

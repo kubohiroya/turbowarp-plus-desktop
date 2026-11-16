@@ -48,6 +48,15 @@ contextBridge.exposeInMainWorld('EditorPreload', {
   ...(ipcRenderer.sendSync('editor-popouts-enabled') === true && {
     reservePopout: (kind, ticket) => ipcRenderer.sendSync('reserve-editor-popout', kind, ticket)
   }),
+  // Only saved entries are launched, by ID. Applications are chosen and confirmed in OS dialogs of the main process.
+  aiAgents: ipcRenderer.sendSync('ai-agents-enabled') === true ? {
+    list: () => ipcRenderer.invoke('ai-agents-list'),
+    context: () => ipcRenderer.invoke('ai-agents-context'),
+    chooseContext: kind => ipcRenderer.invoke('ai-agents-choose-context', kind),
+    chooseApp: () => ipcRenderer.invoke('ai-agents-choose-app'),
+    save: (revision, entries) => ipcRenderer.invoke('ai-agents-save', revision, entries),
+    launch: id => ipcRenderer.invoke('ai-agents-launch', id)
+  } : null,
   workspaceProjectKey: (id) => ipcRenderer.sendSync('workspace-project-key', id),
   workspaceLayouts: ipcRenderer.sendSync('workspace-layouts-enabled') === true ? {
     read: key => ipcRenderer.invoke('read-dockview-layout', key),
