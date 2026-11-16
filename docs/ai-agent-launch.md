@@ -1,6 +1,6 @@
 # AI エージェントのアプリ起動
 
-[Editor #478](https://github.com/kubohiroya/turbowarp-plus-editor/issues/478) の (b) の 4 と (c) のうち、Desktop でアプリを起動する部分（#38）。Plus renderer で `TW_PLUS_DESKTOP_AI_AGENTS=1` を指定して起動する。Mac App Store 版では使えない。
+[Editor #478](https://github.com/kubohiroya/turbowarp-plus-editor/issues/478) の (b) の 4 と (c) のうち、Desktop でアプリを起動する部分（#38）。Plus renderer では既定で有効。`TW_PLUS_DESKTOP_AI_AGENTS=0` を指定して起動すると無効になる。Mac App Store 版では使えない。
 
 ## 使い方
 
@@ -19,4 +19,4 @@
 
 ## 切り戻し
 
-`TW_PLUS_DESKTOP_AI_AGENTS` を外して再起動する。preload の `aiAgents` が `null` になり、Editor は Web 版と同じメニューに戻る。`ai-agents.json` は残る。
+`TW_PLUS_DESKTOP_AI_AGENTS=0` を指定して再起動する。preload の `aiAgents` が `null` になり、Editor は Web 版と同じメニューに戻る。`ai-agents.json` は残る。

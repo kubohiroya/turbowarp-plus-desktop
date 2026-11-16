@@ -234,3 +234,17 @@ test('a damaged settings file lists nothing and keeps a revision for the next sa
   assert.match(listed.revision, /^[0-9a-f]{64}$/u);
   assert.deepEqual(value(await agents.save(listed.revision, [])).entries, []);
 });
+
+test('the Plus renderer launches applications by default, and TW_PLUS_DESKTOP_AI_AGENTS=0 turns it off', () => {
+  const {execFileSync} = require('node:child_process');
+  const flag = value => {
+    const env = {...process.env, TW_PLUS_DESKTOP_RENDERER: '1'};
+    delete env.TW_PLUS_DESKTOP_AI_AGENTS;
+    if (value !== undefined) env.TW_PLUS_DESKTOP_AI_AGENTS = value;
+    return execFileSync(process.execPath, ['-p', "require('./config/feature-flags').aiAgents"],
+      {cwd: path.join(__dirname, '..'), env, encoding: 'utf8'}).trim();
+  };
+  assert.equal(flag(undefined), 'true');
+  assert.equal(flag('1'), 'true');
+  assert.equal(flag('0'), 'false');
+});
