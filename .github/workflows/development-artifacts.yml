@@ -102,6 +102,8 @@ jobs:
       - name: Install Wine for the NSIS uninstaller build
         if: matrix.target == 'nsis'
         run: |
+          # Avoid the slow regional EC2 mirror when installing Wine's large packages.
+          printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends wine wine64 wine32:i386 xvfb xauth
