@@ -12,8 +12,9 @@ config.resolve.alias['@tw-plus/pinned-backpack-window-host$'] =
   path.join(editor, 'scripts/desktop/open-backpack-window.ts');
 config.resolve.alias['@tw-plus/pinned-desktop-panel-host$'] =
   path.join(editor, 'site/editor-layout/desktop-panel-host.ts');
+// The Editor takes the browser window host from windows' ./surfaces (Editor #753); use the same install.
 config.resolve.alias['@tw-plus/browser-window-host$'] =
-  path.join(editor, 'site/editor-backpack/browser-host.ts');
+  createRequire(path.join(editor, 'package.json')).resolve('@kubohiroya/turbowarp-plus-editor-windows/surfaces');
 // Saving collects edits from panels in other windows through the Editor's own collector. Resolve the
 // package as the Editor does, so both imports share one registry.
 config.resolve.alias['@tw-plus/pending-surface-edits$'] =
