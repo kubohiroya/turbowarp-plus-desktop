@@ -175,7 +175,11 @@ test('real Electron isolates two SB3s, prevents duplicate launch, and recovers a
       });
     })));
     assert.deepEqual((await locks()).map(owner => owner.token).sort(), owners.map(owner => owner.token).sort());
-    assert.equal((await browsers()).length, 2);
+    const remaining = await eventually('both existing editors respond after duplicate launches', async () => {
+      const result = await browsers();
+      return result.length === 2 && result;
+    });
+    assert.deepEqual(remaining.map(endpoint => endpoint.targetId).sort(), endpoints.map(endpoint => endpoint.targetId).sort());
 
     const alpha = endpoints.find(endpoint => endpoint.name === 'Alpha.sb3');
     await select({open: third});
