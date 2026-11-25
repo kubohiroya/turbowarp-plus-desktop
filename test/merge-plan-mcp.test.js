@@ -33,6 +33,16 @@ function editor (t, confirm = async () => true) {
     stop: token => handlers.get('merge-plan-mcp-stop')(event, token)};
 }
 
+test('answers the preload when sharing is disabled without installing share handlers', () => {
+  const ipc = new EventEmitter();
+  ipc.handle = () => assert.fail('Disabled sharing must not install request handlers');
+  const event = {};
+  installMergePlanMcp(ipc, {}, null);
+  ipc.emit('merge-plan-mcp-enabled', event);
+  assert.equal(event.returnValue, false);
+  assert.deepEqual(ipc.eventNames(), ['merge-plan-mcp-enabled']);
+});
+
 test('requires a trusted editor, explicit approval and a loopback bearer token', async t => {
   let approve = false;
   const {start, stop, frame} = editor(t, async requested => {

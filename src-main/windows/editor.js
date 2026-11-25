@@ -747,7 +747,7 @@ class EditorWindow extends ProjectRunningWindow {
       });
     }
     this.ipc.on('ai-agents-enabled', event => { event.returnValue = agentStore !== null; });
-    if (mergePlanMcp) installMergePlanMcp(this.ipc, this.window.webContents, async project => {
+    installMergePlanMcp(this.ipc, this.window.webContents, mergePlanMcp ? async project => {
       const ja = getLocale()?.startsWith('ja');
       const {response} = await dialog.showMessageBox(this.window, {
         type: 'question', title: APP_NAME,
@@ -758,7 +758,7 @@ class EditorWindow extends ProjectRunningWindow {
         defaultId: 1, cancelId: 1, noLink: true
       });
       return response === 0;
-    });
+    } : null);
     if (agentStore) {
       const choose = async (title, properties, defaultPath) => {
         const result = await dialog.showOpenDialog(this.window, {title, properties, defaultPath});

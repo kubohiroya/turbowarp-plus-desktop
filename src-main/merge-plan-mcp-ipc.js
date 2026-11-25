@@ -4,10 +4,14 @@ const {isTrustedEditorGitEvent: isTrustedEditorEvent} = require('./local-git/edi
 
 /** The main frame owns the journal. Requests can only reach the frame that authorized this connection. */
 function installMergePlanMcp (ipc, webContents, confirm) {
+  const trusted = event => isTrustedEditorEvent(event, webContents);
+  // The preload queries availability synchronously in every Editor window.
+  ipc.on('merge-plan-mcp-enabled', event => { event.returnValue = Boolean(confirm) && trusted(event); });
+  if (!confirm) return;
+
   let share;
   let attempt;
   const pending = new Map();
-  const trusted = event => isTrustedEditorEvent(event, webContents);
 
   function revoke () {
     attempt = undefined;
@@ -36,7 +40,6 @@ function installMergePlanMcp (ipc, webContents, confirm) {
     });
   }
 
-  ipc.on('merge-plan-mcp-enabled', event => { event.returnValue = trusted(event); });
   ipc.handle('merge-plan-mcp-start', async (event, project) => {
     if (!trusted(event)) throw new Error('The editor is unavailable.');
     if (share || attempt) throw new Error('The window already has a merge plan share.');
