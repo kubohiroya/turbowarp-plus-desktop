@@ -1,0 +1,28 @@
+# マージ候補をローカルMCPで読む
+
+通常配布版Desktopの「ローカルGit」から「マージプラン」を開き、「MCPで共有」を選んで確認します。表示されたURLとアクセストークンを、この作品を扱うAIエージェントのStreamable HTTP接続に渡します。接続は `Authorization: Bearer <アクセストークン>` を使います。URLとトークンは共有を開始するたびに発行されます。
+
+接続は確認画面に表示された作品フォルダに限定されます。別の作品にも接続する場合は、その作品の画面から共有してください。アクセストークンは接続させたいクライアントに渡してください。たとえば、対応するクライアントのURL設定に表示されたURLを指定し、認証ヘッダーの値を環境変数やシークレット設定から渡せます。
+
+| MCP ツール | 取得内容 |
+| --- | --- |
+| `merge_plan_list_generations` | 候補ID、世代ID、世代番号、内容ID、元のコミット、競合の選択。任意で `offset` と `limit`。 |
+| `merge_plan_get_generation` | `generationId` で指定した世代の詳細、保存されたファイルのパス・バイト数、直近のテスト集計 `latestTest`。任意で `offset` と `limit`。 |
+| `merge_plan_read_file` | `generationId` と `path` で指定したファイルの内容。ブロックを読むには、パス一覧から `project.source.json` を指定します。 |
+| `merge_plan_current_playtest` | 試遊の候補・世代・内容・セッションIDと、停止ブロック、指定した値、デバッガーのログ。プレーヤーを閉じると `playtest` は `null`。 |
+
+ファイルの `offset` と `limit` の単位はバイトです。`nextOffset` がある場合は次の読み取りに渡してください。`encoding` は `utf8` または `base64` です。UTF-8文字の途中で区切られた範囲も `base64` でバイト列を取得できます。
+
+`latestTest` は `generationId` と `contentId` に対応する完了時刻 `finishedAt`、件数 `total`、結果別の件数 `counts` を返します。未実行の場合は `null` です。テストの実行と失敗したチェックの確認はエディタで行います。
+
+共有中に候補の「試遊」を開くと、その試遊内でブロックのコンテキストメニューからブレークポイントを設定できます。そこで停止したブロックや、マージの競合で停止した位置を `observation.stop` から取得できます。停止位置の理由は `breakpoint` または `merge-conflict` です。停止中のスレッドを特定できる場合は `targetId`、`threadIndex`、`topBlockId` も返します。
+
+`variables` に `[{ "id": "変数またはリストのID" }]` を指定します。IDは世代の `project.source.json` にあります。クローンの値を読む場合は停止位置などから取得した `targetId` を加えます。リストは32項目ずつ返り、続きは `nextOffset` を次の `offset` に渡します。最大16件を指定でき、未指定時は値を取得しません。長い文字列は先頭1024文字を返し、`truncated` で示します。
+
+`logLimit` でデバッガーのログを指定できます。既定は直近20行で、0で省略、最大50行です。`sessionId` を指定すると、その試遊が終了・交代した時点で取得を拒否します。候補の再生中にスクリプトを編集した場合は `modifiedInPlayer` が立ちます。世代ファイルの読み取りは保存済みの内容を返します。
+
+共有と読み取りによって、作品フォルダやGitの状態は変更されません。「MCP共有を停止」で資格情報を無効にできます。ローカルGitパネルを閉じた場合、作品の切り替え、Desktopの再読み込みやウィンドウを閉じた場合も共有が終了します。
+
+切り戻す場合は `TW_PLUS_DESKTOP_MERGE_PLAN_MCP=0` でDesktopを再起動します。保存済みの候補はそのまま使えます。
+
+試遊結果をもとに修正案を返す場合は、`generationId` と `contentId` を記録した[修正候補JSON](https://github.com/kubohiroya/turbowarp-plus-editor-git/blob/main/README.ja.md#外部で修正したマージ候補を取り込む)を作り、エディタの **修正候補を取り込む** で選びます。競合で停止した場合は、`observation.stop.conflictId` を取り込みファイルの `resolves` に使えます。

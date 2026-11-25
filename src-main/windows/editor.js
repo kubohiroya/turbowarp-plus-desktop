@@ -28,6 +28,7 @@ const {workspaceProjectKey} = require('../workspace-project-key');
 const {validDockviewLayout, validDockviewKey} = require('../dockview-layout-store');
 const {ExternalYamlFiles} = require('../external-yaml-files');
 const {createAgentStore, createAiAgents} = require('../ai-agents');
+const {installMergePlanMcp} = require('../merge-plan-mcp-ipc');
 const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
 const {installLocalExtensionDevelopment} = require('../local-extension-development');
@@ -40,7 +41,7 @@ const {createGitCredentialHelper} = require('../local-git/git-credential-helper'
 const {PERSONAL_TOKEN} = require('../local-git/service');
 const {installEditorPopouts, isReservedPopout} = require('./editor-popouts');
 const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml,
-  gitPersonalAccessToken, gitCredentialHelper, aiAgents} =
+  gitPersonalAccessToken, gitCredentialHelper, aiAgents, mergePlanMcp} =
   require('../../config/feature-flags');
 
 const rendererDirectory = plusRenderer ? 'plus-gui' : 'gui';
@@ -746,6 +747,18 @@ class EditorWindow extends ProjectRunningWindow {
       });
     }
     this.ipc.on('ai-agents-enabled', event => { event.returnValue = agentStore !== null; });
+    installMergePlanMcp(this.ipc, this.window.webContents, mergePlanMcp ? async project => {
+      const ja = getLocale()?.startsWith('ja');
+      const {response} = await dialog.showMessageBox(this.window, {
+        type: 'question', title: APP_NAME,
+        message: ja ? 'この作品のマージ候補、テストの集計、試遊の停止位置・変数・リスト・ログをローカルMCPで共有しますか？' :
+          'Share this project’s merge generations, test summaries, playtest stops, variables, lists and logs via local MCP?',
+        detail: [project.repository, project.folder].filter(Boolean).join('/'),
+        buttons: ja ? ['共有する', 'キャンセル'] : ['Share', 'Cancel'],
+        defaultId: 1, cancelId: 1, noLink: true
+      });
+      return response === 0;
+    } : null);
     if (agentStore) {
       const choose = async (title, properties, defaultPath) => {
         const result = await dialog.showOpenDialog(this.window, {title, properties, defaultPath});
