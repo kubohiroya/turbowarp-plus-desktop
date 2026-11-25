@@ -1,5 +1,37 @@
 const {contextBridge, ipcRenderer} = require('electron');
 
+let mergePlanReader;
+const mergePlanShare = {
+  async start (project, read) {
+    if (mergePlanReader) return null;
+    const listener = async (_event, requestId, tool, args) => {
+      try {
+        ipcRenderer.send('merge-plan-mcp-result', requestId, true, await read(tool, args));
+      } catch (error) {
+        ipcRenderer.send('merge-plan-mcp-result', requestId, false, String(error?.message ?? 'The project is unavailable.'));
+      }
+    };
+    const reader = mergePlanReader = {listener};
+    ipcRenderer.on('merge-plan-mcp-read', listener);
+    try {
+      const connection = await ipcRenderer.invoke('merge-plan-mcp-start', project);
+      reader.token = connection?.token;
+      return connection;
+    } finally {
+      if (!reader.token) {
+        ipcRenderer.removeListener('merge-plan-mcp-read', listener);
+        mergePlanReader = undefined;
+      }
+    }
+  },
+  async stop (token) {
+    if (mergePlanReader?.token !== token) return;
+    ipcRenderer.removeListener('merge-plan-mcp-read', mergePlanReader.listener);
+    mergePlanReader = undefined;
+    await ipcRenderer.invoke('merge-plan-mcp-stop', token);
+  }
+};
+
 const localGit = {
   getConnection: () => ipcRenderer.invoke('local-git-connection'),
   getState: () => ipcRenderer.invoke('local-git-state'),
@@ -13,6 +45,7 @@ const localGit = {
 };
 
 contextBridge.exposeInMainWorld('EditorPreload', {
+  ...(ipcRenderer.sendSync('merge-plan-mcp-enabled') === true && {mergePlanShare}),
   ...(ipcRenderer.sendSync('local-git-author-enabled') === true && {
     localGitAuthor: () => ipcRenderer.invoke('local-git-author')
   }),
