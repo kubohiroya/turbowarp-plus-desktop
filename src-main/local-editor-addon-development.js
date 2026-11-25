@@ -7,6 +7,8 @@ const {openDirectory, readDevelopmentFile} = require('./local-extension-developm
 const cssPath = /^(?:[a-z\d_-][a-z\d_.-]*\/)*[a-z\d_-][a-z\d_.-]*\.css$/iu;
 const scriptPath = /^(?:[a-z\d_-][a-z\d_.-]*\/)*[a-z\d_-][a-z\d_.-]*\.m?js$/iu;
 const addonId = /^(?:@[a-z\d_-]+\/)?[a-z\d][a-z\d_.-]{0,100}$/u;
+const editorDocument = 'tw-editor://./plus-gui/gui.html';
+const isEditorDocument = url => url?.split(/[?#]/u, 1)[0] === editorDocument;
 const editorPatterns = new Set(['projects', 'https://scratch.mit.edu/projects/*']);
 const allowedAtRules = new Set(['media', 'supports', 'layer', 'container', 'keyframes', 'starting-style']);
 const text = (value, limit) => typeof value === 'string' ? value.trim().slice(0, limit) : '';
@@ -65,6 +67,8 @@ async function readEditorAddon (directory) {
   const row = {id, metadata, format};
   let styles;
   let scripts;
+  let activation = 'live';
+  let defaults = [];
   if (turbo) {
     const supportedEntries = entries => Array.isArray(entries) && entries.every(entry =>
       entry && entry.if === undefined && (entry.matches === undefined || (Array.isArray(entry.matches) &&
@@ -74,11 +78,19 @@ async function readEditorAddon (directory) {
     }
     styles = (manifest.userstyles ?? []).map(style => style.url);
     scripts = (manifest.userscripts ?? []).map(script => script.url);
+    if (manifest.dynamicEnable === false || manifest.dynamicDisable === false) activation = 'startup';
+    if (Array.isArray(manifest.settings)) {
+      defaults = manifest.settings.filter(setting => typeof setting?.id === 'string' &&
+        /^[a-z\d_-]{1,80}$/iu.test(setting.id) &&
+        ['boolean', 'number', 'string'].includes(typeof setting.default)).map(setting => [setting.id, setting.default]);
+    }
   } else {
     const addon = manifest.turbowarpPlusEditor?.addon;
-    if (!addon || (addon.styles !== undefined && (!Array.isArray(addon.styles) || addon.styles.length > 1))) {
+    if (!addon || (addon.activation !== undefined && !['live', 'startup'].includes(addon.activation)) ||
+        (addon.styles !== undefined && (!Array.isArray(addon.styles) || addon.styles.length > 1))) {
       return {...row, unavailable: 'LOCAL_ADDON_RUNTIME_UNSUPPORTED'};
     }
+    activation = addon.activation ?? 'live';
     styles = addon.styles ?? [];
     scripts = addon.entry === undefined ? [] : [addon.entry];
   }
@@ -96,7 +108,7 @@ async function readEditorAddon (directory) {
     throw error('LOCAL_ADDON_INCOMPLETE');
   }
   const digest = createHash('sha256').update(JSON.stringify([decode(bytes), css, sources])).digest('hex');
-  return {...row, css, sources, digest};
+  return {...row, activation, defaults, css, sources, digest};
 }
 
 function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory, confirm, intervalMs = 500}) {
@@ -106,10 +118,18 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
   let generation = 0;
   let queue = Promise.resolve();
   let timer;
+  let resume = false;
   const activeFrame = event => event.sender === webContents && event.senderFrame === webContents.mainFrame &&
-    event.senderFrame?.url?.split(/[?#]/u, 1)[0] === 'tw-editor://./plus-gui/gui.html';
-  const list = () => Array.from(sessions.values(), ({token, directory, id, format, metadata, enabled, failure, unavailable}) =>
-    ({token, directory: directory.root, id, format, metadata, enabled, error: failure ?? unavailable, unavailable}));
+    isEditorDocument(event.senderFrame?.url);
+  const currentDigest = session => session.applied ? session.lastGood?.digest : null;
+  const needsReload = session => session.activation === 'startup' &&
+    (session.enabled ? currentDigest(session) !== session.nextDigest : session.applied);
+  const list = () => Array.from(sessions.values(), session => {
+    const {token, directory, id, format, metadata, enabled, failure, unavailable, activation, removing} = session;
+    return {token, directory: directory.root, id, format, metadata, enabled, error: failure ?? unavailable, unavailable,
+      activation, removing, appliedDigest: currentDigest(session), reloadRequired: needsReload(session)};
+  });
+  const readFailure = cause => cause.code?.startsWith('LOCAL_ADDON_') ? cause.code : 'LOCAL_ADDON_INCOMPLETE';
   const publish = () => { if (!webContents.isDestroyed()) webContents.send('local-editor-addon-change', list()); };
   const serial = operation => {
     const result = queue.then(operation);
@@ -129,7 +149,8 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
     };
     const timeout = setTimeout(() => finish(false), 5000);
     waiting.set(runtimeId, finish);
-    runtime({type: 'prepare', runtimeId, token: session.token, format: session.format, sources: build.sources});
+    runtime({type: 'prepare', runtimeId, token: session.token, format: session.format, id: session.id,
+      defaults: build.defaults, sources: build.sources});
   });
   const apply = async (session, build, epoch) => {
     const runtimeId = build.sources.length ? randomUUID() : null;
@@ -144,7 +165,8 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
       if (!live(session, epoch)) return;
       if (runtimeId) runtime({type: 'accept', runtimeId, token: session.token});
       else if (session.runtimeId) runtime({type: 'remove', token: session.token});
-      Object.assign(session, {key, runtimeId, digest: build.digest, metadata: build.metadata, enabled: true, failure: null});
+      Object.assign(session, {key, runtimeId, lastGood: build, nextDigest: build.digest,
+        metadata: build.metadata, applied: true, failure: null});
       accepted = true;
     } finally {
       if (!accepted && runtimeId) runtime({type: 'discard', runtimeId});
@@ -154,12 +176,12 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
   const unload = async session => {
     if (session.key) await webContents.removeInsertedCSS(session.key);
     if (session.runtimeId) runtime({type: 'remove', token: session.token});
-    Object.assign(session, {key: null, runtimeId: null, enabled: false, pending: null, failure: null});
+    Object.assign(session, {key: null, runtimeId: null, applied: false, pending: null, failure: null});
   };
   const compatible = async session => {
     const build = await readEditorAddon(session.directory);
     if (build.id !== session.id || build.format !== session.format || build.unavailable ||
-        (build.sources.length > 0 && !session.permitsScripts)) throw error('LOCAL_ADDON_CHANGED');
+        build.activation !== session.activation || (build.sources.length > 0 && !session.permitsScripts)) throw error('LOCAL_ADDON_CHANGED');
     return build;
   };
   const update = async epoch => {
@@ -169,24 +191,36 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
       try {
         const build = await compatible(session);
         if (!live(session, epoch)) return;
-        if (session.digest === build.digest) {
+        if (session.activation === 'startup' && session.nextDigest === build.digest) {
           session.pending = null;
-          if (session.failure) { session.failure = null; publish(); }
+          if (session.failure && session.failure !== 'LOCAL_ADDON_RUNTIME_FAILED') {
+            session.failure = null;
+            publish();
+          }
+          continue;
+        }
+        if (currentDigest(session) === build.digest) {
+          session.pending = null;
+          if (session.failure || session.nextDigest !== build.digest) {
+            Object.assign(session, {failure: null, nextDigest: build.digest});
+            publish();
+          }
           continue;
         }
         if (session.pending !== build.digest) { session.pending = build.digest; continue; }
-        await apply(session, build, epoch);
+        if (session.activation === 'startup') Object.assign(session, {nextDigest: build.digest, failure: null});
+        else await apply(session, build, epoch);
         if (live(session, epoch)) publish();
       } catch (cause) {
         session.pending = null;
         if (!live(session, epoch)) return;
-        const failure = cause.code?.startsWith('LOCAL_ADDON_') ? cause.code : 'LOCAL_ADDON_INCOMPLETE';
+        const failure = readFailure(cause);
         if (session.failure !== failure) { session.failure = failure; publish(); }
       }
     }
   };
   const schedule = () => {
-    if (timer || !Array.from(sessions.values()).some(session => session.enabled)) return;
+    if (resume || timer || !Array.from(sessions.values()).some(session => session.enabled)) return;
     const epoch = generation;
     timer = setTimeout(() => {
       timer = null;
@@ -213,16 +247,17 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
       if (Array.from(sessions.values()).some(item => item.id === build.id || item.directory.root === directory.root)) {
         throw error('LOCAL_ADDON_DUPLICATE');
       }
-      if (!build.unavailable && !(await confirm(directory.root, build.id, {scripts: build.sources.length > 0}))) return;
+      if (!build.unavailable && !(await confirm(directory.root, build.id, {scripts: build.sources.length > 0, activation: build.activation}))) return;
       if (generation !== epoch) return;
       await serial(async () => {
         if (generation !== epoch) return;
-        const {id, format, metadata, unavailable} = build;
-        const session = {token: randomUUID(), directory, id, format, metadata, unavailable, enabled: false,
+        const {id, format, metadata, unavailable, activation} = build;
+        const session = {token: randomUUID(), directory, id, format, metadata, unavailable, activation,
+          enabled: !unavailable, applied: false, nextDigest: build.digest ?? null,
           permitsScripts: Boolean(build.sources?.length)};
         sessions.set(session.token, session);
         try {
-          if (!unavailable) await apply(session, build, epoch);
+          if (session.enabled && activation === 'live') await apply(session, build, epoch);
         } catch (cause) {
           sessions.delete(session.token);
           throw cause;
@@ -235,15 +270,17 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
     const epoch = generation;
     return serial(async () => {
       const session = sessions.get(token);
-      if (!session || generation !== epoch || session.unavailable || typeof enabled !== 'boolean' || session.enabled === enabled) return;
+      if (!session || generation !== epoch || session.unavailable || session.removing ||
+          typeof enabled !== 'boolean' || session.enabled === enabled) return;
       if (enabled) {
         const build = await compatible(session);
         if (!live(session, epoch)) return;
-        await apply(session, build, epoch);
-      } else {
+        if (session.activation === 'live') await apply(session, build, epoch);
+        else Object.assign(session, {nextDigest: build.digest, failure: null});
+      } else if (session.activation === 'live') {
         await unload(session);
       }
-      if (live(session, epoch)) { publish(); schedule(); }
+      if (live(session, epoch)) { session.enabled = enabled; publish(); schedule(); }
     });
   });
   handle('remove', token => {
@@ -251,25 +288,61 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
     return serial(async () => {
       const session = sessions.get(token);
       if (!session || generation !== epoch) return;
-      await unload(session);
-      if (live(session, epoch)) { sessions.delete(token); publish(); }
+      if (session.activation === 'startup' && session.applied) {
+        Object.assign(session, {enabled: false, removing: true, pending: null});
+        publish();
+      } else {
+        await unload(session);
+        if (live(session, epoch)) { sessions.delete(token); publish(); }
+      }
     });
   });
-  const reset = () => {
+  handle('ready', () => {
+    const epoch = generation;
+    return serial(async () => {
+      if (generation !== epoch || !resume) return;
+      for (const session of sessions.values()) {
+        if (generation !== epoch) return;
+        if (!session.enabled) continue;
+        let attemptedDigest;
+        try {
+          const build = await compatible(session);
+          if (!live(session, epoch)) return;
+          attemptedDigest = session.nextDigest = build.digest;
+          await apply(session, build, epoch);
+        } catch (cause) {
+          if (!live(session, epoch)) return;
+          const {lastGood, nextDigest} = session;
+          if (lastGood && lastGood.digest !== attemptedDigest) {
+            try { await apply(session, lastGood, epoch); }
+            catch { /* The build could not be restored in the replacement renderer. */ }
+          }
+          if (live(session, epoch)) Object.assign(session, {nextDigest, failure: readFailure(cause)});
+        }
+      }
+      if (generation === epoch) { resume = false; publish(); schedule(); }
+    });
+  });
+  const reset = (keep = false) => {
     generation++;
+    resume = keep;
     for (const finish of waiting.values()) finish(false);
     runtime({type: 'reset'});
     clearTimeout(timer);
     timer = null;
-    const active = Array.from(sessions.values());
-    sessions.clear();
-    if (!webContents.isDestroyed()) for (const {key} of active) {
-      if (key) void webContents.removeInsertedCSS(key).catch(() => {});
+    for (const [token, session] of sessions) {
+      if (session.key && !webContents.isDestroyed()) void webContents.removeInsertedCSS(session.key).catch(() => {});
+      if (!keep || session.removing) sessions.delete(token);
+      else Object.assign(session, {key: null, runtimeId: null, applied: false, pending: null});
     }
   };
-  webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) reset(); });
-  webContents.on('render-process-gone', reset);
-  webContents.once('destroyed', reset);
+  webContents.on('did-start-navigation', details => {
+    if (details.isMainFrame && !details.isSameDocument) {
+      reset(isEditorDocument(webContents.mainFrame?.url) && isEditorDocument(details.url));
+    }
+  });
+  webContents.on('render-process-gone', () => reset());
+  webContents.once('destroyed', () => reset());
 }
 
 module.exports = {installLocalEditorAddonDevelopment, readEditorAddon};

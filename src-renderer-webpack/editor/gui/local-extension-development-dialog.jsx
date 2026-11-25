@@ -19,11 +19,15 @@ const messages = locale => locale.startsWith('ja') ? {
 
 const addonMessages = locale => locale.startsWith('ja') ? {
   title: 'エディタアドオンの開発フォルダ',
-  intro: 'チェックを入れると、エディタアドオンが有効になります。このフォルダの新しいビルドを自動で読み込みます。チェックを外すと無効になります。',
+  intro: 'チェックを入れたフォルダの新しいビルドを読み込みます。再読み込みが必要な変更は一覧に表示します。',
+  startup: 'エディターの起動時に反映', pending: '作品を保存してからエディターを再読み込みすると反映されます。',
+  applied: '適用中のビルド',
   formats: {turbowarp: 'TurboWarp 形式', plus: 'Plus Editor 追加機能パッケージ'}
 } : {
   title: 'Editor Add-on Development Folders',
-  intro: 'Check a folder to enable its editor add-on. New builds in the folder are loaded automatically. Uncheck it to disable the add-on.',
+  intro: 'New builds are loaded from checked folders. The list shows changes that require reloading the editor.',
+  startup: 'Applied on editor startup', pending: 'Save your project and reload the editor to apply this change.',
+  applied: 'Active build',
   formats: {turbowarp: 'TurboWarp format', plus: 'Plus Editor add-on package'}
 };
 
@@ -34,16 +38,19 @@ function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove})
     ids={[session.id]}
     locale={locale}
     previewCache={null}
-    pick={{checked: session.enabled, disabled: session.busy || Boolean(session.unavailable), onToggle: () => onToggle(session.token, !session.enabled)}}
+    pick={{checked: session.enabled, disabled: session.busy || Boolean(session.unavailable) || session.removing, onToggle: () => onToggle(session.token, !session.enabled)}}
     details={<div className={styles.developmentPath}>
       {session.format && <span>{text.formats[session.format]}</span>}
       <strong>{text.folder}</strong>
       <code>{session.directory}</code>
+      {session.activation === 'startup' && <span>{text.startup}</span>}
+      {session.appliedDigest && <span>{text.applied} <code title={session.appliedDigest}>{session.appliedDigest.slice(0, 12)}</code></span>}
+      {session.reloadRequired && <span role="status">{text.pending}</span>}
     </div>}
   >
     {session.error && <p className="twextsec-failed" role="alert">{errorText(session.error)}</p>}
     <div className="twextsec-actions">
-      <button type="button" onClick={() => onRemove(session.token)} disabled={session.busy}>{text.remove}</button>
+      <button type="button" onClick={() => onRemove(session.token)} disabled={session.busy || session.removing}>{text.remove}</button>
     </div>
   </ExtensionRow>;
 }

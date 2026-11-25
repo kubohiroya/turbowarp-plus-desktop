@@ -183,6 +183,7 @@ test('two independently watched extension folders update one Desktop project and
           remove: token => window.invokeDesktopIPC('local-editor-addon-remove', token),
           onChange: listener => subscribe('local-editor-addon-change', listener),
           onRuntime: listener => subscribe('local-editor-addon-runtime', listener),
+          ready: () => window.invokeDesktopIPC('local-editor-addon-ready'),
           prepared: (...args) => window.invokeDesktopIPC('local-editor-addon-prepared', ...args)
         },
         localExtensions: {
@@ -312,7 +313,7 @@ test('two independently watched extension folders update one Desktop project and
     await manager.getByText('Close', {exact: true}).click();
     await (await openDesktopMenu()).getByRole('menuitem', {name: 'Editor Add-on Development Folders…'}).click();
     const addons = page.getByRole('dialog', {name: 'Editor Add-on Development Folders'});
-    await expect(addons.getByText('Check a folder to enable its editor add-on. New builds in the folder are loaded automatically. Uncheck it to disable the add-on.',
+    await expect(addons.getByText('New builds are loaded from checked folders. The list shows changes that require reloading the editor.',
       {exact: true})).toBeVisible();
     const addAddon = addons.getByRole('button', {name: 'Add Development Folder…'});
     await addAddon.click();

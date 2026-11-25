@@ -10,10 +10,15 @@ function runAddonWorker () {
     }
     commands.set(id, {label, handler});
   };
-  self.addEventListener('message', async ({data: {format, sources}}) => {
+  self.addEventListener('message', async ({data: {format, id, defaults, sources}}) => {
     try {
       const api = Object.freeze({registerCommand});
-      const addon = Object.freeze({tab: Object.freeze({registerEditorCommand: registerCommand})});
+      const settings = new Map(defaults);
+      const addon = Object.freeze({
+        tab: Object.freeze({registerEditorCommand: registerCommand}),
+        settings: Object.freeze({get: key => settings.get(key)}),
+        self: Object.freeze({id, disabled: false})
+      });
       for (const source of sources) {
         const url = URL.createObjectURL(new Blob([source], {type: 'text/javascript'}));
         try {
@@ -76,7 +81,8 @@ function connect (event) {
       pending = data.request;
       worker.postMessage(data);
     };
-    worker.postMessage({format: event.data.format, sources: event.data.sources});
+    const {format, id, defaults, sources} = event.data;
+    worker.postMessage({format, id, defaults, sources});
     window.addEventListener('pagehide', () => worker.terminate(), {once: true});
   } catch {
     port.postMessage({type: 'failed'});

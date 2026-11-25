@@ -29,7 +29,7 @@ export function ensureEditorAddonRuntime (vm, host) {
     for (const key of staged.keys()) remove(staged, key);
     for (const key of active.keys()) remove(active, key);
   };
-  const prepare = ({runtimeId, token, format, sources}) => {
+  const prepare = ({runtimeId, token, format, id, defaults, sources}) => {
     const frame = document.createElement('iframe');
     frame.hidden = true;
     frame.title = 'Editor add-on runtime';
@@ -63,7 +63,7 @@ export function ensureEditorAddonRuntime (vm, host) {
       }
     };
     frame.addEventListener('load', () => {
-      frame.contentWindow.postMessage({type: 'local-editor-addon-connect', format, sources}, '*', [port2]);
+      frame.contentWindow.postMessage({type: 'local-editor-addon-connect', format, id, defaults, sources}, '*', [port2]);
     }, {once: true});
     document.body.appendChild(frame);
   };
@@ -108,6 +108,7 @@ export function ensureEditorAddonRuntime (vm, host) {
     case 'reset': reset(); break;
     }
   });
+  void host.ready().catch(() => {});
   connection = {vm, dispose: () => {
     unsubscribe();
     vm.removeListener('PROJECT_LOADED', projectLoaded);

@@ -23,17 +23,27 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
   t.after(() => fs.rm(worktree, {recursive: true, force: true}));
   const turbo = path.join(worktree, 'turbo-commands');
   const plus = path.join(worktree, 'plus-commands');
-  await Promise.all([fs.mkdir(turbo), fs.mkdir(plus)]);
+  const startup = path.join(worktree, 'startup-commands');
+  const startupOutput = path.join(startup, 'entry.js');
+  const buildStartup = label => fs.writeFile(startupOutput, `export const activate = api =>
+    api.registerCommand('startup', ${JSON.stringify(label)}, () => {});`);
+  await Promise.all([fs.mkdir(turbo), fs.mkdir(plus), fs.mkdir(startup)]);
   await Promise.all([
     fs.writeFile(path.join(turbo, 'addon.json'), JSON.stringify({
-      name: 'Turbo commands', userscripts: [{url: 'command.js', matches: ['projects']}]
+      name: 'Turbo commands', userscripts: [{url: 'command.js', matches: ['projects']}],
+      settings: [{id: 'stop-label', type: 'string', default: 'Stop from TurboWarp add-on'}]
     })),
     fs.writeFile(path.join(turbo, 'command.js'), `export default ({addon}) =>
-      addon.tab.registerEditorCommand('stop', 'Stop from TurboWarp add-on', () =>
+      addon.tab.registerEditorCommand('stop', addon.settings.get('stop-label'), () =>
         ({project: 'stop', label: 'Stopped from TurboWarp add-on'}));`),
     fs.writeFile(path.join(plus, 'package.json'), JSON.stringify({
       name: 'plus-commands', displayName: 'Plus commands', turbowarpPlusEditor: {addon: {entry: 'command.mjs'}}
-    }))
+    })),
+    fs.writeFile(path.join(startup, 'package.json'), JSON.stringify({
+      name: 'startup-commands', displayName: 'Startup commands',
+      turbowarpPlusEditor: {addon: {entry: 'entry.js', activation: 'startup'}}
+    })),
+    buildStartup('Startup version one')
   ]);
   const plusSource = `export function activate(api: {
     registerCommand(id: string, label: string,
@@ -106,7 +116,7 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
       .catch(error => { if (!closing) errors.push(error.message); });
   };
   const handlers = new Map();
-  const folders = [turbo, plus];
+  const folders = [turbo, plus, startup];
   const approvals = [];
   installLocalEditorAddonDevelopment({on() {}, handle: (name, handler) => handlers.set(name, handler)}, webContents, {
     chooseDirectory: async () => folders.shift(),
@@ -134,7 +144,8 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
         remove: token => window.invokeAddonIPC('remove', token),
         prepared: (...values) => window.invokeAddonIPC('prepared', ...values),
         onChange: listener => subscribe('local-editor-addon-change', listener),
-        onRuntime: listener => subscribe('local-editor-addon-runtime', listener)
+        onRuntime: listener => subscribe('local-editor-addon-runtime', listener),
+        ready: () => window.invokeAddonIPC('ready')
       }
     };
   });
@@ -191,7 +202,80 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
   await dialog.getByText('Close', {exact: true}).click();
   await expect(command('Ran build two #2')).toHaveCount(0);
   await expect(command('Stopped from TurboWarp add-on')).toBeVisible();
-  assert.deepEqual(approvals, [{id: 'turbo-commands', scripts: true}, {id: 'plus-commands', scripts: true}]);
+  const reload = async () => {
+    webContents.emit('did-start-navigation', {isMainFrame: true, isSameDocument: false, url: webContents.mainFrame.url});
+    await page.reload();
+    await page.waitForFunction(() => Boolean(window.vm?.runtime.getTargetForStage()));
+    await expect(command('Stop from TurboWarp add-on')).toBeVisible();
+  };
+  const reloadNotice = dialog.getByRole('status').filter({hasText: 'reload the editor'});
+  await openFolders();
+  await add.click();
+  const startupCheckbox = dialog.getByRole('checkbox', {name: 'Startup commands'});
+  await expect(startupCheckbox).toBeChecked();
+  await expect(reloadNotice).toBeVisible();
+  await dialog.getByText('Close', {exact: true}).click();
+  await expect(command('Startup version one')).toHaveCount(0);
+  await reload();
+  await expect(command('Startup version one')).toBeVisible();
+
+  await page.evaluate(() => {
+    const stage = window.vm.runtime.getTargetForStage();
+    stage.createVariable('unsaved', 'unsaved', '', false);
+    stage.variables.unsaved.value = 'keep this edit';
+    window.vm.emit('PROJECT_CHANGED');
+  });
+  const startupRow = dialog.locator('li').filter({hasText: 'startup-commands'});
+  const activeBuild = startupRow.locator('code[title]');
+  await openFolders();
+  await expect(reloadNotice).toHaveCount(0);
+  const firstDigest = await activeBuild.getAttribute('title');
+  assert.match(firstDigest, /^[a-f0-9]{64}$/u);
+  await buildStartup('Startup version two');
+  await expect(reloadNotice).toBeVisible();
+  await expect(activeBuild).toHaveAttribute('title', firstDigest);
+  await dialog.getByText('Close', {exact: true}).click();
+  await expect(command('Startup version one')).toBeVisible();
+  await expect(command('Startup version two')).toHaveCount(0);
+  assert.equal(await page.evaluate(() => window.vm.runtime.getTargetForStage().variables.unsaved.value), 'keep this edit');
+  await reload();
+  await expect(command('Startup version two')).toBeVisible();
+
+  await fs.writeFile(startupOutput, 'export function activate( {');
+  await reload();
+  await expect(command('Startup version two')).toBeVisible();
+  await openFolders();
+  await expect(startupRow.getByRole('alert')).toContainText('JavaScript failed to start');
+  await startupCheckbox.click();
+  await expect(startupCheckbox).not.toBeChecked();
+  await expect(reloadNotice).toBeVisible();
+  await dialog.getByText('Close', {exact: true}).click();
+  await expect(command('Startup version two')).toBeVisible();
+  await reload();
+  await expect(command('Startup version two')).toHaveCount(0);
+
+  await buildStartup('Startup version three');
+  await openFolders();
+  await startupCheckbox.click();
+  await expect(reloadNotice).toBeVisible();
+  await dialog.getByText('Close', {exact: true}).click();
+  await reload();
+  await expect(command('Startup version three')).toBeVisible();
+  await openFolders();
+  await startupRow.getByRole('button', {name: 'Remove from list'}).click();
+  await expect(startupCheckbox).toBeDisabled();
+  await expect(reloadNotice).toBeVisible();
+  await dialog.getByText('Close', {exact: true}).click();
+  await reload();
+  await expect(command('Startup version three')).toHaveCount(0);
+  await openFolders();
+  await expect(startupRow).toHaveCount(0);
+
+  assert.deepEqual(approvals, [
+    {id: 'turbo-commands', scripts: true, activation: 'live'},
+    {id: 'plus-commands', scripts: true, activation: 'live'},
+    {id: 'startup-commands', scripts: true, activation: 'startup'}
+  ]);
   assert.equal(probeRequests, 1);
   assert.deepEqual(errors, []);
 });

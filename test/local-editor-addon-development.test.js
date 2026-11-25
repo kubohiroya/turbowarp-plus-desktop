@@ -27,10 +27,14 @@ test('loads local JavaScript and CSS for both formats within the selected folder
   const read = async ({root}) => readEditorAddon(await openDirectory(root));
   assert.equal((await read(a)).format, 'turbowarp');
   assert.equal((await read(b)).format, 'plus');
-  await fs.writeFile(a.file, JSON.stringify({...a.manifest, userscripts: [{url: 'example.js'}]}));
+  await fs.writeFile(a.file, JSON.stringify({...a.manifest, userscripts: [{url: 'example.js'}],
+    dynamicDisable: false, settings: [{id: 'name', default: 'Run'}, {id: 'unsupported', default: {}}]}));
   const turboSource = 'export default ({addon}) => addon.tab.registerEditorCommand("run", "Run", () => ({project: "run"}));';
   await fs.writeFile(path.join(a.root, 'example.js'), turboSource);
-  assert.deepEqual((await read(a)).sources, [turboSource]);
+  const turbo = await read(a);
+  assert.deepEqual(turbo.sources, [turboSource]);
+  assert.equal(turbo.activation, 'startup');
+  assert.deepEqual(turbo.defaults, [['name', 'Run']]);
   await fs.writeFile(a.file, JSON.stringify({...a.manifest, userscripts: [{url: 'example.js', if: {}}]}));
   assert.equal((await read(a)).unavailable, 'LOCAL_ADDON_RUNTIME_UNSUPPORTED');
   const plusSource = 'export const activate = api => api.registerCommand("stop", "Stop", () => ({project: "stop"}));';
@@ -39,6 +43,7 @@ test('loads local JavaScript and CSS for both formats within the selected folder
   const plus = await read(b);
   assert.equal(plus.css, '');
   assert.deepEqual(plus.sources, [plusSource]);
+  assert.equal(plus.activation, 'live');
   await fs.writeFile(b.file, JSON.stringify(b.manifest));
   for (const css of ['@import "https://test.invalid/style.css";',
     '.editor { background: var(--network, image-set("https://test.invalid/private" 1x)); }',
@@ -109,7 +114,15 @@ test('the two editor add-on folders can update, pause and resume independently',
   assert.equal(approvals, 2);
   await invoke('remove', second.token);
   assert.deepEqual(invoke('list').map(item => item.id), [first.id]);
-  webContents.emit('did-start-navigation', {isMainFrame: true});
+  webContents.emit('did-start-navigation', {isMainFrame: true, url: webContents.mainFrame.url});
+  assert.equal(styles.size, 0);
+  assert.equal(invoke('list')[0].appliedDigest, null);
+  await invoke('ready');
+  assert.equal(styles.size, 1);
+  assert.match(invoke('list')[0].appliedDigest, /^[a-f0-9]{64}$/u);
+  assert.equal(approvals, 2);
+  webContents.emit('did-start-navigation', {isMainFrame: true, url: 'https://example.invalid/'});
+  await invoke('ready');
   assert.equal(styles.size, 0);
   assert.deepEqual(invoke('list'), []);
 });

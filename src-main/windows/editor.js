@@ -857,17 +857,21 @@ class EditorWindow extends ProjectRunningWindow {
           });
           return result.canceled ? null : result.filePaths[0];
         },
-        confirm: async (directory, id, {scripts}) => {
+        confirm: async (directory, id, {scripts, activation}) => {
           const ja = settings.locale?.startsWith('ja');
           const detail = scripts ?
-            (ja ? `エディタアドオン ${id} の JavaScript を隔離環境で実行します。このフォルダの新しいビルドを自動で読み込みます。` :
-              `JavaScript for ${id} runs in an isolated environment. New builds in this folder are loaded automatically.`) :
-            (ja ? `エディタアドオン ${id} を有効にします。このフォルダの新しいビルドを自動で読み込みます。` :
-              `This enables the editor add-on ${id} and loads new builds from this folder automatically.`);
+            (ja ? `エディタアドオン ${id} の JavaScript を隔離環境で実行します。` :
+              `JavaScript for ${id} runs in an isolated environment.`) :
+            (ja ? `エディタアドオン ${id} を有効にします。` : `This enables the editor add-on ${id}.`);
+          const timing = activation === 'startup' ?
+            (ja ? 'このフォルダの新しいビルドはエディターの再読み込み時に反映します。' :
+              'New builds from this folder are applied when the editor reloads.') :
+            (ja ? 'このフォルダの新しいビルドを自動で反映します。' :
+              'New builds from this folder are applied automatically.');
           const result = await dialog.showMessageBox(this.window, {
             type: 'question',
             message: ja ? 'エディタアドオンを有効にしますか？' : 'Enable this editor add-on?',
-            detail: `${detail}\n\n${directory}`,
+            detail: `${detail}\n${timing}\n\n${directory}`,
             buttons: ja ? ['キャンセル', '監視を開始'] : ['Cancel', 'Start Watching'],
             defaultId: 0, cancelId: 0, noLink: true
           });
