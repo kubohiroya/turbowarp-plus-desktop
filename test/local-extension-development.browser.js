@@ -7,8 +7,6 @@ const path = require('node:path');
 const {tmpdir} = require('node:os');
 const {test} = require('node:test');
 const {promisify} = require('node:util');
-const {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild} = require('../src-main/local-extension-development');
-const {installLocalEditorAddonDevelopment} = require('../src-main/local-editor-addon-development');
 
 const exec = promisify(execFile);
 const origin = 'http://localhost:41015';
@@ -23,19 +21,31 @@ test('two independently watched extension folders update one Desktop project and
     const editor = process.env.TW_PLUS_EDITOR_SOURCE;
     const template = process.env.TW_PLUS_EXTENSION_TEMPLATE_ROOT;
     const testBundle = process.env.TW_PLUS_TEST_EXTENSION_JS;
+    const packagedApp = process.env.TW_PLUS_DESKTOP_APP_SOURCE;
     const expectSourceMap = process.env.TW_PLUS_EXPECT_DEVELOPMENT_SOURCE_MAP === '1';
     const expectRuntimeDiagnostic = process.env.TW_PLUS_EXPECT_RUNTIME_DIAGNOSTIC === '1';
     for (const value of [editor, template, testBundle]) assert.ok(value && path.isAbsolute(value),
       'Set TW_PLUS_EDITOR_SOURCE, TW_PLUS_EXTENSION_TEMPLATE_ROOT and TW_PLUS_TEST_EXTENSION_JS');
+    if (packagedApp) assert.ok(path.isAbsolute(packagedApp), 'TW_PLUS_DESKTOP_APP_SOURCE must be an absolute path');
+    const app = packagedApp || path.resolve(__dirname, '..');
+    const {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild} =
+      require(path.join(app, 'src-main/local-extension-development'));
+    const {installLocalEditorAddonDevelopment} = require(path.join(app, 'src-main/local-editor-addon-development'));
     const {chromium, expect} = require(path.join(editor, 'node_modules/@playwright/test'));
     const Zip = require(path.join(editor, 'node_modules/@turbowarp/jszip'));
     const {project} = require(path.join(editor, 'test/e2e/extension-loader/project.cts'));
-    const renderer = path.resolve(__dirname, '../dist-renderer-webpack/editor/plus-gui');
-    const pin = require('../config/plus-renderer.json');
+    const renderer = path.join(app, 'dist-renderer-webpack/editor/plus-gui');
+    const pin = require(path.join(app, 'config/plus-renderer.json'));
     const info = JSON.parse(await fs.readFile(path.join(renderer, 'build-info.json'), 'utf8'));
     const {stdout} = await exec('git', ['-C', editor, 'rev-parse', 'HEAD']);
     assert.equal(info.editorRevision, pin.editorRevision);
     assert.equal(info.editorRevision, stdout.trim());
+    if (packagedApp) {
+      const pins = require(path.join(editor, 'site/source.json'));
+      const {stdout: desktopSHA} = await exec('git', ['rev-parse', 'HEAD'], {cwd: path.resolve(__dirname, '..')});
+      assert.equal(info.desktopDirty, false);
+      assert.deepEqual([info.desktopRevision, info.guiRevision, info.vmRevision], [desktopSHA.trim(), pins.guiRevision, pins.vmRevision]);
+    }
 
     const worktree = await fs.mkdtemp(path.join(tmpdir(), 'tw-local-extension-'));
     t.after(() => fs.rm(worktree, {recursive: true, force: true}));
