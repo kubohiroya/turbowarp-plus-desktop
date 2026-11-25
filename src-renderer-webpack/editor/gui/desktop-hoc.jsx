@@ -21,6 +21,8 @@ import {
 } from 'scratch-gui/src/reducers/tw';
 import {WrappedFileHandle} from './filesystem-api.js';
 import {setStrings} from '../prompt/prompt.js';
+import {startEditorAddonRuntime} from './editor-addon-startup.js';
+import {DesktopSettingsMenuContext} from './desktop-settings-menu-context.js';
 import {connectLocalExtensionDevelopment} from './local-extension-development.js';
 
 // The locale provider remounts DesktopHOC within the same editor window.
@@ -80,16 +82,19 @@ const USERNAME_KEY = 'tw:username';
 const DEFAULT_USERNAME = 'player';
 
 const developmentText = (locale) => locale.startsWith('ja') ? {
-  start: '拡張の開発フォルダを開く…', stop: '拡張の自動更新を停止',
-  LOCAL_EXTENSION_BUILD_REQUIRED: '開発フォルダに完成したビルドがありません。テンプレートでビルドしてから開いてください。',
-  LOCAL_EXTENSION_CONFLICT: '作品の同じIDの拡張は別のビルドです。開発フォルダの監視を停止しました。',
-  LOCAL_EXTENSION_INCOMPATIBLE: '拡張のIDまたはブロック定義が変わったため、前のビルドを維持しています。',
+  menu: 'デスクトップメニュー',
+  folders: '拡張ブロックの開発フォルダ…',
+  LOCAL_EXTENSION_ALREADY_WATCHING: 'このフォルダ、または同じ拡張ブロック ID のフォルダは監視中です。',
+  LOCAL_EXTENSION_BUILD_REQUIRED: '開発フォルダに拡張ブロックの完成ビルドがありません。テンプレートでビルドしてから開いてください。',
+  LOCAL_EXTENSION_CONFLICT: '作品の同じ ID の拡張ブロックは別のビルドです。開発フォルダの監視を停止しました。',
+  LOCAL_EXTENSION_INCOMPATIBLE: '拡張ブロックの ID またはブロック定義が変わったため、前のビルドを維持しています。',
   LOCAL_EXTENSION_BOUNDARY: '開発フォルダまたは成果物の参照先が変わったため、監視を停止しました。',
   LOCAL_EXTENSION_APPLY_FAILED: '新しいビルドを反映できませんでした。前のビルドを維持しています。',
-  PROJECT_RECOVERY_REQUIRED: '拡張の更新後に作品を復旧できませんでした。監視を停止しました。',
-  LOCAL_EXTENSION_UNAVAILABLE: 'このEditorでは拡張の開発フォルダを開けません。'
+  PROJECT_RECOVERY_REQUIRED: '拡張ブロックの更新後に作品を復旧できませんでした。監視を停止しました。',
+  LOCAL_EXTENSION_UNAVAILABLE: 'このEditorでは拡張ブロックの開発フォルダを開けません。'
 } : {
-  start: 'Open Extension Development Folder…', stop: 'Stop Extension Live Reload',
+  menu: 'Desktop menu', folders: 'Extension Development Folders…',
+  LOCAL_EXTENSION_ALREADY_WATCHING: 'This folder, or a folder with the same extension ID, is already being watched.',
   LOCAL_EXTENSION_BUILD_REQUIRED: 'Build the extension with the template before opening the development folder.',
   LOCAL_EXTENSION_CONFLICT: 'The project already uses a different build of this extension. Watching stopped.',
   LOCAL_EXTENSION_INCOMPATIBLE: 'The extension ID or block interface changed. The previous build is still active.',
@@ -104,7 +109,9 @@ const DesktopHOC = function (WrappedComponent) {
     constructor (props) {
       super(props);
       this.state = {
-        title: projectTitle
+        title: projectTitle,
+        developmentSessions: [],
+        developmentError: null
       };
       this.handleUpdateProjectTitle = this.handleUpdateProjectTitle.bind(this);
       this.handleRuntimeDisposed = this.handleRuntimeDisposed.bind(this);
@@ -125,10 +132,12 @@ const DesktopHOC = function (WrappedComponent) {
       }
     }
     componentDidMount () {
+      const addonsReady = startEditorAddonRuntime(this.props.vm, EditorPreload.localEditorAddons);
       if (EditorPreload.localExtensions) {
         const text = developmentText(this.props.locale);
         this.localExtensions = connectLocalExtensionDevelopment(this.props.vm, EditorPreload.localExtensions,
-          code => window.alert(text[code] ?? text.LOCAL_EXTENSION_UNAVAILABLE));
+          code => this.setState({developmentError: text[code] ?? text.LOCAL_EXTENSION_UNAVAILABLE}),
+          developmentSessions => this.setState({developmentSessions}));
       }
       EditorPreload.setExportForPackager(() => this.props.vm.saveProjectSb3('arraybuffer')
         .then((buffer) => ({
@@ -147,6 +156,7 @@ const DesktopHOC = function (WrappedComponent) {
 
       this.props.onLoadingStarted();
       (async () => {
+        await addonsReady;
         // Note that 0 is a valid ID and does mean there is a file open
         const id = await EditorPreload.getInitialFile();
         if (id === null) {
@@ -238,39 +248,42 @@ const DesktopHOC = function (WrappedComponent) {
         ...props
       } = this.props;
       const development = developmentText(locale);
+      const aboutItems = [
+        {title: this.messages['in-app-about.desktop-settings'], onClick: handleClickDesktopSettings},
+        {title: this.messages['in-app-about.privacy'], onClick: handleClickPrivacy},
+        {title: this.messages['in-app-about.about'], onClick: handleClickAbout},
+        {title: this.messages['in-app-about.source-code'], onClick: handleClickSourceCode}
+      ];
+      const menu = EditorPreload.localExtensions ? {
+        label: development.menu,
+        foldersLabel: development.folders,
+        development: {
+          locale,
+          sessions: this.state.developmentSessions,
+          error: this.state.developmentError,
+          errorText: code => development[code],
+          onAdd: () => {
+            this.setState({developmentError: null});
+            return this.localExtensions?.start();
+          },
+          onToggle: (token, enabled) => this.localExtensions?.setEnabled(token, enabled),
+          onRemove: token => this.localExtensions?.stop(token)
+        }
+      } : null;
       return (
-        <WrappedComponent
-          projectTitle={this.state.title}
-          onUpdateProjectTitle={this.handleUpdateProjectTitle}
-          onClickAddonSettings={handleClickAddonSettings}
-          onClickNewWindow={handleClickNewWindow}
-          onClickPackager={handleClickPackager}
-          onClickAbout={[
-            ...(EditorPreload.localExtensions ? [
-              {title: development.start, onClick: () => { void this.localExtensions?.start(); }},
-              {title: development.stop, onClick: () => { void this.localExtensions?.stop(); }}
-            ] : []),
-            {
-              title: this.messages['in-app-about.desktop-settings'],
-              onClick: handleClickDesktopSettings
-            },
-            {
-              title: this.messages['in-app-about.privacy'],
-              onClick: handleClickPrivacy
-            },
-            {
-              title: this.messages['in-app-about.about'],
-              onClick: handleClickAbout
-            },
-            {
-              title: this.messages['in-app-about.source-code'],
-              onClick: handleClickSourceCode
-            },
-          ]}
-          onClickDesktopSettings={handleClickDesktopSettings}
-          securityManager={securityManager}
-          {...props}
-        />
+        <DesktopSettingsMenuContext.Provider value={menu}>
+          <WrappedComponent
+            projectTitle={this.state.title}
+            onUpdateProjectTitle={this.handleUpdateProjectTitle}
+            onClickAddonSettings={handleClickAddonSettings}
+            onClickNewWindow={handleClickNewWindow}
+            onClickPackager={handleClickPackager}
+            onClickAbout={menu ? undefined : aboutItems}
+            onClickDesktopSettings={handleClickDesktopSettings}
+            securityManager={securityManager}
+            {...props}
+          />
+        </DesktopSettingsMenuContext.Provider>
       );
     }
   }

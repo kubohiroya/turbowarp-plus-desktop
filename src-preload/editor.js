@@ -52,10 +52,22 @@ const localGit = {
 
 contextBridge.exposeInMainWorld('EditorPreload', {
   ...(ipcRenderer.sendSync('merge-plan-mcp-enabled') === true && {mergePlanShare}),
+  localEditorAddons: ipcRenderer.sendSync('local-editor-addon-enabled') === true ? {
+    list: () => ipcRenderer.invoke('local-editor-addon-list'),
+    start: () => ipcRenderer.invoke('local-editor-addon-start'),
+    setEnabled: (token, enabled) => ipcRenderer.invoke('local-editor-addon-set-enabled', token, enabled),
+    setSettings: (token, revision, changes) => ipcRenderer.invoke('local-editor-addon-set-settings', token, revision, changes),
+    remove: token => ipcRenderer.invoke('local-editor-addon-remove', token),
+    onChange: listener => subscribe('local-editor-addon-change', listener),
+    onRuntime: listener => subscribe('local-editor-addon-runtime', listener),
+    ready: () => ipcRenderer.invoke('local-editor-addon-ready'),
+    prepared: (runtimeId, success) => ipcRenderer.invoke('local-editor-addon-prepared', runtimeId, success)
+  } : null,
   localExtensions: ipcRenderer.sendSync('local-extension-development-enabled') === true ? {
     start: () => ipcRenderer.invoke('local-extension-start'),
     authorize: (session, id, sha256) => ipcRenderer.invoke('local-extension-authorize', session, id, sha256),
-    stop: () => ipcRenderer.invoke('local-extension-stop'),
+    setEnabled: (session, enabled) => ipcRenderer.invoke('local-extension-set-enabled', session, enabled),
+    stop: session => ipcRenderer.invoke('local-extension-stop', session),
     onBuild: callback => subscribe('local-extension-build', callback),
     onStopped: callback => subscribe('local-extension-stopped', callback)
   } : null,

@@ -1,0 +1,124 @@
+.settings-menu {
+    align-self: center;
+    flex: none;
+    margin-inline-end: 0.25rem;
+    color: #202631;
+    --tw-plus-icon-menu-layer: 30;
+    --tw-plus-icon-menu-max-width: min(32rem, calc(100vw - 1rem));
+}
+
+.settings-menu :global(.tw-icon-menu__trigger) {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    font-size: 1rem;
+}
+
+.settings-menu :global(.tw-icon-menu__trigger):hover,
+.settings-menu :global(.tw-icon-menu__trigger)[aria-expanded="true"] {
+    background: #00000014;
+}
+
+.settings-menu :global(.tw-icon-menu__trigger-icon) {
+    display: grid;
+    place-items: center;
+}
+
+.settings-menu :global(.tw-icon-menu__menu) {
+    max-block-size: min(28rem, calc(100vh - 4rem));
+    overflow: auto;
+    background: #fff;
+    border-color: #d7dbe6;
+}
+
+.settings-menu :global(.tw-icon-menu__menu) button {
+    overflow-wrap: anywhere;
+}
+
+.settings-menu :global(.tw-icon-menu__menu) button:hover,
+.settings-menu :global(.tw-icon-menu__menu) button:focus-visible {
+    background: #f0f2f5;
+}
+
+.development-body {
+    overflow: hidden;
+}
+
+.development-review {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+    max-block-size: calc(100vh - 252px);
+}
+
+.development-rows {
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+
+.development-actions {
+    padding-block-start: 0.75rem;
+    border-block-start: 1px solid var(--ui-black-transparent, #0000001a);
+}
+
+.development-path {
+    display: grid;
+    gap: 0.125rem;
+    margin-block: 0.25rem;
+    font-size: 0.875em;
+}
+
+.development-path code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.editor-addon-panel {
+    padding: 1rem;
+    min-inline-size: min(24rem, 75vw);
+}
+
+.editor-addon-panel p {
+    margin-block: 0 1rem;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.editor-addon-panel :global(.twextsec-actions) {
+    flex-wrap: wrap;
+}
+
+.editor-addon-panel button {
+    max-inline-size: 100%;
+    overflow-wrap: anywhere;
+}
+
+.editor-addon-settings {
+    margin-block: 0.75rem;
+}
+
+.editor-addon-settings summary {
+    cursor: pointer;
+}
+
+.editor-addon-settings fieldset {
+    display: grid;
+    gap: 0.5rem;
+    margin: 0.5rem 0 0;
+    min-inline-size: 0;
+}
+
+.editor-addon-settings label {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+    overflow-wrap: anywhere;
+}
+
+.editor-addon-settings input,
+.editor-addon-settings select {
+    max-inline-size: 100%;
+}

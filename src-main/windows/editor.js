@@ -829,7 +829,7 @@ class EditorWindow extends ProjectRunningWindow {
         chooseDirectory: async () => {
           const ja = settings.locale?.startsWith('ja');
           const result = await dialog.showOpenDialog(this.window, {
-            title: ja ? '拡張の開発フォルダを選択' : 'Choose an extension development folder',
+            title: ja ? '拡張ブロックの開発フォルダを選択' : 'Choose an extension development folder',
             properties: ['openDirectory']
           });
           return result.canceled ? null : result.filePaths[0];
@@ -838,9 +838,44 @@ class EditorWindow extends ProjectRunningWindow {
           const ja = settings.locale?.startsWith('ja');
           const result = await dialog.showMessageBox(this.window, {
             type: 'question',
-            message: ja ? '開発中の拡張を自動で更新しますか？' : 'Reload development builds automatically?',
-            detail: ja ? `拡張 ${id} をサンドボックスで実行します。次のフォルダで完成した互換ビルドが、この作品に自動で反映されます。\n\n${directory}` :
+            message: ja ? '開発中の拡張ブロックを自動で更新しますか？' : 'Reload development builds automatically?',
+            detail: ja ? `拡張ブロック ${id} をサンドボックスで実行します。次のフォルダで完成した互換ビルドが、この作品に自動で反映されます。\n\n${directory}` :
               `Extension ${id} runs in the sandbox. Compatible builds completed in this folder will update this project automatically.\n\n${directory}`,
+            buttons: ja ? ['キャンセル', '監視を開始'] : ['Cancel', 'Start Watching'],
+            defaultId: 0, cancelId: 0, noLink: true
+          });
+          return result.response === 1;
+        }
+      });
+      const {installLocalEditorAddonDevelopment} = require('../local-editor-addon-development');
+      installLocalEditorAddonDevelopment(this.ipc, this.window.webContents, {
+        chooseDirectory: async () => {
+          const ja = settings.locale?.startsWith('ja');
+          const result = await dialog.showOpenDialog(this.window, {
+            title: ja ? 'エディタアドオンの開発フォルダを選択' : 'Choose an editor add-on development folder',
+            properties: ['openDirectory']
+          });
+          return result.canceled ? null : result.filePaths[0];
+        },
+        confirm: async (directory, id, {scripts, activation, paintClipboard, viewport}) => {
+          const ja = settings.locale?.startsWith('ja');
+          const detail = scripts ?
+            (ja ? `エディタアドオン ${id} の JavaScript を隔離環境で実行します。` :
+              `JavaScript for ${id} runs in an isolated environment.`) :
+            (ja ? `エディタアドオン ${id} を有効にします。` : `This enables the editor add-on ${id}.`);
+          const timing = activation === 'startup' ?
+            (ja ? 'このフォルダの新しいビルドはエディターの再読み込み時に反映します。' :
+              'New builds from this folder are applied when the editor reloads.') :
+            (ja ? 'このフォルダの新しいビルドを自動で反映します。' :
+              'New builds from this folder are applied automatically.');
+          const paint = paintClipboard ? (ja ? 'コスチュームエディターの貼り付け位置を元の位置に戻す操作を許可します。' :
+            'Allows resetting the costume editor paste offset.') : '';
+          const blocks = viewport ? (ja ? 'ブロックのワークスペースの表示位置と拡大率を操作できます。' :
+            'Allows changing the position and zoom of the blocks workspace.') : '';
+          const result = await dialog.showMessageBox(this.window, {
+            type: 'question',
+            message: ja ? 'エディタアドオンを有効にしますか？' : 'Enable this editor add-on?',
+            detail: [detail, timing, paint, blocks, `\n${directory}`].filter(Boolean).join('\n'),
             buttons: ja ? ['キャンセル', '監視を開始'] : ['Cancel', 'Start Watching'],
             defaultId: 0, cancelId: 0, noLink: true
           });
@@ -849,6 +884,7 @@ class EditorWindow extends ProjectRunningWindow {
       });
     } else {
       this.ipc.on('local-extension-development-enabled', event => { event.returnValue = false; });
+      this.ipc.on('local-editor-addon-enabled', event => { event.returnValue = false; });
     }
     if (gitEnabled) {
       installEditorGit(this.ipc, this.window.webContents, {
