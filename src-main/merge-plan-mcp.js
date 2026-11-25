@@ -17,7 +17,7 @@ const tool = (name, description, properties = {}, required = []) => ({
 });
 const tools = [
   tool('merge_plan_list_generations', 'List saved generations of all merge candidates for the shared project.', integers(100)),
-  tool('merge_plan_get_generation', 'Read a generation and list its archived paths and file sizes.',
+  tool('merge_plan_get_generation', 'Read a generation, its latest saved test summary, and its archived paths and file sizes.',
     {generationId, ...integers(200)}, ['generationId']),
   tool('merge_plan_read_file', 'Read bytes of an archived path from a saved generation. Use nextOffset for subsequent chunks.',
     {generationId, path: {type: 'string', minLength: 1, maxLength: 4096}, ...integers(32768)}, ['generationId', 'path']),

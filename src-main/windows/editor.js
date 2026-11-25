@@ -751,8 +751,8 @@ class EditorWindow extends ProjectRunningWindow {
       const ja = getLocale()?.startsWith('ja');
       const {response} = await dialog.showMessageBox(this.window, {
         type: 'question', title: APP_NAME,
-        message: ja ? 'この作品のマージ候補、試遊の停止位置・変数・リスト・ログをローカルMCPで共有しますか？' :
-          'Share this project’s merge generations, playtest stops, variables, lists and logs via local MCP?',
+        message: ja ? 'この作品のマージ候補、テストの集計、試遊の停止位置・変数・リスト・ログをローカルMCPで共有しますか？' :
+          'Share this project’s merge generations, test summaries, playtest stops, variables, lists and logs via local MCP?',
         detail: [project.repository, project.folder].filter(Boolean).join('/'),
         buttons: ja ? ['共有する', 'キャンセル'] : ['Share', 'Cancel'],
         defaultId: 1, cancelId: 1, noLink: true
