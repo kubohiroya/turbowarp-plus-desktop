@@ -20,6 +20,7 @@ async function fixture (t, extensionId = id) {
   const files = {
     bundle: path.join(dist, 'fixture.js'),
     api: path.join(dist, 'extension-manifest.json'),
+    map: path.join(dist, 'fixture.js.map'),
     marker: path.join(dist, 'extension-development.json')
   };
   const publish = async (bundle, manifest = JSON.stringify({...JSON.parse(api), id: extensionId})) => {
@@ -44,6 +45,79 @@ test('a development snapshot rejects partial files and references outside the se
   await fs.unlink(files.bundle);
   await fs.symlink(other, files.bundle, 'file');
   await assert.rejects(readDevelopmentBuild(directory), {code: 'LOCAL_EXTENSION_BOUNDARY'});
+});
+
+test('a development snapshot verifies its optional map without exposing its contents', async t => {
+  const {root, publish, files} = await fixture(t);
+  await publish('first');
+  const directory = await openDirectory(root);
+  const descriptor = JSON.parse(await fs.readFile(files.marker, 'utf8'));
+  assert.equal(Object.hasOwn(await readDevelopmentBuild(directory), 'sourceMapSHA256'), false);
+  const map = {version: 3, file: 'fixture.js', sources: ['src/extension.ts', '[external]'], names: [], mappings: 'AAAA'};
+  const writeMap = async (value, file = 'fixture.js.map') => {
+    const body = JSON.stringify(value);
+    const hash = sha256(body);
+    await fs.writeFile(files.map, body);
+    await fs.writeFile(files.marker, JSON.stringify({...descriptor, sourceMap: {file, sha256: hash}}));
+    return hash;
+  };
+  const hash = await writeMap(map);
+  assert.deepEqual(await readDevelopmentBuild(directory), {
+    id, bytes: new Uint8Array(Buffer.from('first')), sha256: sha256('first'), apiSHA256: sha256(api),
+    sourceMapSHA256: hash
+  });
+  await fs.writeFile(files.map, 'changed');
+  await assert.rejects(readDevelopmentBuild(directory), {code: 'LOCAL_EXTENSION_INCOMPLETE'});
+  await writeMap(map, '../fixture.js.map');
+  await assert.rejects(readDevelopmentBuild(directory), {code: 'LOCAL_EXTENSION_DESCRIPTOR'});
+  await writeMap({...map, sources: ['../../outside.ts']});
+  await assert.rejects(readDevelopmentBuild(directory), {code: 'LOCAL_EXTENSION_DESCRIPTOR'});
+  await writeMap({...map, sourcesContent: ['private source']});
+  await assert.rejects(readDevelopmentBuild(directory), {code: 'LOCAL_EXTENSION_DESCRIPTOR'});
+});
+
+test('runtime coordinates resolve only through the map of the applied build', {timeout: 5000}, async t => {
+  const {root, publish, files} = await fixture(t);
+  const build = async (code, mappings) => {
+    await publish(code);
+    const descriptor = JSON.parse(await fs.readFile(files.marker, 'utf8'));
+    const body = JSON.stringify({version: 3, file: 'fixture.js', sources: ['src/extension.ts'], names: [], mappings});
+    const sourceMap = {file: 'fixture.js.map', sha256: sha256(body)};
+    await fs.writeFile(files.map, body);
+    await fs.writeFile(files.marker, JSON.stringify({...descriptor, sourceMap}));
+    return [descriptor.bundle.sha256, sourceMap.sha256];
+  };
+  const first = await build('first', 'AAEC');
+  const contents = new EventEmitter();
+  contents.mainFrame = {url: 'tw-editor://./plus-gui/gui.html'};
+  contents.send = (...args) => contents.emit(...args);
+  const handlers = new Map();
+  installLocalExtensionDevelopment({on() {}, handle: (name, handler) => handlers.set(name, handler)}, contents,
+    {chooseDirectory: async () => root, confirm: async () => true, intervalMs: 20});
+  t.after(() => contents.emit('destroyed'));
+  const event = {sender: contents, senderFrame: contents.mainFrame};
+  const invoke = (name, ...args) => handlers.get('local-extension-' + name)(event, ...args);
+  const {session} = await invoke('start');
+  const retain = (...args) => invoke('retain-diagnostics', session, ...args);
+  const resolve = (...args) => invoke('resolve-diagnostic', session, ...args);
+  assert.equal(retain(...first, true), false);
+  assert.equal(retain(...first, false), true);
+  assert.equal(retain(...first, true), true);
+  assert.deepEqual(resolve(...first, 1, 1), {file: 'src/extension.ts', line: 3, column: 2});
+  const update = once(contents, 'local-extension-build');
+  const second = await build('second', 'AAGC');
+  await update;
+  assert.equal(retain(...second, false), true);
+  assert.equal(resolve(...second, 1, 1), null);
+  assert.equal(resolve(first[0], second[1], 1, 1), null);
+  assert.equal(resolve(...first, 2, 1), null);
+  assert.equal(resolve(...first, '1', 1), null);
+  assert.deepEqual(resolve(...first, 1, 1), {file: 'src/extension.ts', line: 3, column: 2});
+  assert.equal(retain(...second, true), true);
+  assert.equal(resolve(...first, 1, 1), null);
+  assert.deepEqual(resolve(...second, 1, 1), {file: 'src/extension.ts', line: 4, column: 2});
+  invoke('stop', session);
+  assert.equal(resolve(...second, 1, 1), null);
 });
 
 test('retries an atomic artifact replacement after opening its previous inode', async t => {
@@ -88,12 +162,16 @@ test('watching requires the current Editor frame and grants only the active sess
     assert.equal(invoke('authorize', first.session, 'other', first.sha256), false);
     const updates = [];
     webContents.on('local-extension-build', build => updates.push(build));
+    const unavailable = once(webContents, 'local-extension-artifacts');
     await fs.writeFile(files.bundle, 'partial');
-    await delay(80);
+    assert.deepEqual(await unavailable, [{session: first.session, waiting: true}]);
     assert.equal(updates.length, 0);
+    assert.equal(invoke('authorize', first.session, id, first.sha256), true);
+    const available = once(webContents, 'local-extension-artifacts');
     const update = once(webContents, 'local-extension-build');
     await publish('second');
     const [second] = await update;
+    assert.deepEqual(await available, [{session: first.session, waiting: false}]);
     assert.equal(second.session, first.session);
     assert.equal(Object.hasOwn(second, 'directory'), false);
     assert.equal(invoke('authorize', first.session, id, first.sha256), false);

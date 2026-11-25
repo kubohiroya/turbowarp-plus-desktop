@@ -197,7 +197,7 @@ test('Desktop loads editor add-ons with live settings, workspace actions, startu
       setExportForPackager() {}, setChanged() {}, closedFile() {}, dropPermissions() {}, setIsFullScreen() {},
       getAdvancedCustomizations: async () => ({}), getPreferredMediaDevices: async () => ({}),
       setLocale: () => ({strings: {'prompt.ok': 'OK', 'prompt.cancel': 'Cancel'}}),
-      localExtensions: {onBuild: () => () => {}, onStopped: () => () => {}},
+      localExtensions: {onBuild: () => () => {}, onArtifacts: () => () => {}, onStopped: () => () => {}},
       localEditorAddons: {
         list: () => window.invokeAddonIPC('list'),
         start: () => window.invokeAddonIPC('start'),
