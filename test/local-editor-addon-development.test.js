@@ -39,11 +39,19 @@ test('loads local JavaScript and CSS for both formats within the selected folder
   assert.equal((await read(a)).unavailable, 'LOCAL_ADDON_RUNTIME_UNSUPPORTED');
   const plusSource = 'export const activate = api => api.registerCommand("stop", "Stop", () => ({project: "stop"}));';
   await fs.writeFile(path.join(b.root, 'sample.mjs'), plusSource);
-  await fs.writeFile(b.file, JSON.stringify({name: 'plus-addon', turbowarpPlusEditor: {addon: {entry: 'sample.mjs'}}}));
+  const viewportPackage = {name: 'plus-addon', turbowarpPlusEditor: {
+    addon: {entry: 'sample.mjs', permissions: ['workspace.viewport']}
+  }};
+  await fs.writeFile(b.file, JSON.stringify(viewportPackage));
   const plus = await read(b);
   assert.equal(plus.css, '');
   assert.deepEqual(plus.sources, [plusSource]);
   assert.equal(plus.activation, 'live');
+  assert.equal(plus.viewport, true);
+  await fs.writeFile(b.file, JSON.stringify({...viewportPackage,
+    turbowarpPlusEditor: {addon: {...viewportPackage.turbowarpPlusEditor.addon, permissions: ['workspace.anything']}}
+  }));
+  assert.equal((await read(b)).unavailable, 'LOCAL_ADDON_RUNTIME_UNSUPPORTED');
   await fs.writeFile(b.file, JSON.stringify(b.manifest));
   for (const css of ['@import "https://test.invalid/style.css";',
     '.editor { background: var(--network, image-set("https://test.invalid/private" 1x)); }',

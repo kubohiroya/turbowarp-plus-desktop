@@ -1,18 +1,34 @@
 // This bootstrap is embedded in a sandboxed, opaque-origin frame. Only the Worker imports add-on code.
 function runAddonWorker () {
   const commands = new Map();
+  const panels = new Map();
   const send = self.postMessage.bind(self);
+  const validId = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,50}$/.test(id);
+  const validLabel = label => typeof label === 'string' && label.trim() && label.length <= 80;
   const registerCommand = (id, label, handler) => {
-    if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,50}$/.test(id) ||
-        typeof label !== 'string' || !label.trim() || label.length > 80 ||
-        typeof handler !== 'function' || commands.has(id) || commands.size >= 12) {
+    if (!validId(id) || !validLabel(label) || typeof handler !== 'function' || commands.has(id) || commands.size >= 12) {
       throw new TypeError('Invalid editor command');
     }
     commands.set(id, {label, handler});
   };
+  const registerPanel = (id, label, {text = '', actions} = {}) => {
+    if (!validId(id) || !validLabel(label) || typeof text !== 'string' || text.length > 800 || panels.has(id) ||
+        panels.size >= 4 || !Array.isArray(actions) || !actions.length || actions.length > 6) {
+      throw new TypeError('Invalid editor panel');
+    }
+    const handlers = new Map();
+    for (const {id: actionId, label: actionLabel, run} of actions) {
+      if (!validId(actionId) || !validLabel(actionLabel) || typeof run !== 'function' || handlers.has(actionId)) {
+        throw new TypeError('Invalid editor panel action');
+      }
+      handlers.set(actionId, {label: actionLabel, handler: run});
+    }
+    panels.set(id, {label, text, actions: handlers});
+  };
+  const describe = entries => Array.from(entries, ([id, {label}]) => ({id, label}));
   self.addEventListener('message', async ({data: {format, id, defaults, sources, startup, paintClipboard}}) => {
     try {
-      const api = Object.freeze({registerCommand});
+      const api = Object.freeze({registerCommand, registerPanel});
       const settings = new Map(defaults);
       const reduxEvents = new EventTarget();
       let paintEvents = false;
@@ -29,7 +45,7 @@ function runAddonWorker () {
         }
       });
       const addon = Object.freeze({
-        tab: Object.freeze({registerEditorCommand: registerCommand, redux}),
+        tab: Object.freeze({registerEditorCommand: registerCommand, registerEditorPanel: registerPanel, redux}),
         settings: Object.freeze({get: key => settings.get(key)}),
         self: Object.freeze(Object.assign(new EventTarget(), {id, disabled: false, enabledLate: false}))
       });
@@ -46,8 +62,8 @@ function runAddonWorker () {
           URL.revokeObjectURL(url);
         }
       }
-      if (!commands.size && !paintEvents) throw new Error('No editor integration registered');
-      self.addEventListener('message', async ({data: {type, id, request, action}}) => {
+      if (!commands.size && !panels.size && !paintEvents) throw new Error('No editor integration registered');
+      self.addEventListener('message', async ({data: {type, id, panel, request, action}}) => {
         if (type === 'paint' && paintEvents) {
           paintReply = {type: 'paint-result', request, clearOffset: false};
           reduxEvents.dispatchEvent(new CustomEvent('statechanged', {detail: {action: {type: action}}}));
@@ -56,13 +72,16 @@ function runAddonWorker () {
           return;
         }
         try {
-          const value = await commands.get(id)?.handler();
-          send({type: 'result', request, project: value?.project, label: value?.label});
+          const entry = panel ? panels.get(panel)?.actions.get(id) : commands.get(id);
+          const value = await entry?.handler();
+          send({type: 'result', request, project: value?.project, label: value?.label, text: value?.text,
+            workspace: value?.workspace});
         } catch {
           send({type: 'result', request});
         }
       });
-      send({type: 'ready', paintEvents, commands: Array.from(commands, ([id, {label}]) => ({id, label}))});
+      send({type: 'ready', paintEvents, commands: describe(commands),
+        panels: Array.from(panels, ([id, {label, text, actions}]) => ({id, label, text, actions: describe(actions)}))});
     } catch {
       send({type: 'failed'});
     }
@@ -84,20 +103,23 @@ function connect (event) {
       initializing = false;
       port.postMessage({type: 'failed'});
     };
+    const bounded = (value, length) => typeof value === 'string' ? value.slice(0, length + 1) : undefined;
+    const entry = value => ({id: bounded(value?.id, 50), label: bounded(value?.label, 80)});
+    const entries = (value, limit, map) => Array.isArray(value) && value.length <= limit ? Array.from(value, map) : null;
     worker.addEventListener('message', ({data}) => {
-      if (initializing && data?.type === 'ready' && Array.isArray(data.commands) && data.commands.length <= 12) {
+      if (initializing && data?.type === 'ready') {
         initializing = false;
-        const commands = data.commands.map(command => ({
-          id: typeof command?.id === 'string' && command.id.slice(0, 51),
-          label: typeof command?.label === 'string' && command.label.slice(0, 81)
+        const commands = entries(data.commands, 12, entry);
+        const panels = entries(data.panels, 4, panel => ({
+          ...entry(panel), text: bounded(panel?.text, 800), actions: entries(panel?.actions, 6, entry)
         }));
-        port.postMessage({type: 'ready', commands, paintEvents: data.paintEvents === true});
+        port.postMessage({type: 'ready', commands, panels, paintEvents: data.paintEvents === true});
       } else if (data?.type === 'failed') {
         fail();
       } else if (data?.type === 'result' && pending && data.request === pending) {
         port.postMessage({type: 'result', request: pending,
           project: data.project === 'run' || data.project === 'stop' ? data.project : undefined,
-          label: typeof data.label === 'string' ? data.label.slice(0, 81) : undefined});
+          label: bounded(data.label, 80), text: bounded(data.text, 800), workspace: bounded(data.workspace, 12)});
         pending = undefined;
       } else if (data?.type === 'paint-result' && pendingPaint && data.request === pendingPaint) {
         port.postMessage({type: 'paint-result', request: pendingPaint, clearOffset: data.clearOffset === true});

@@ -1,7 +1,9 @@
 import React from 'react';
+import {connect} from 'react-redux';
 import {IconMenuButton} from '@kubohiroya/turbowarp-plus-editor-windows';
 import {renderStageControls as renderEditorStageControls} from '@tw-plus/pinned-gui-host';
 import {DesktopSettingsMenuContext} from './desktop-settings-menu-context.js';
+import {LocalEditorAddonPanel} from './local-editor-addon-panel.jsx';
 import {LocalEditorAddonDevelopmentDialog} from './local-editor-addon-development-dialog.jsx';
 import {LocalExtensionDevelopmentDialog} from './local-extension-development-dialog.jsx';
 import styles from './desktop-settings-menu.css';
@@ -41,7 +43,13 @@ function DesktopSettingsMenu () {
   </>;
 }
 
+const EditorAddonPanelSlot = connect(({scratchGui: {mode}}) => ({
+  stageOnly: mode.isPlayerOnly || mode.isFullScreen
+}))(({vm, menuLocale, stageOnly}) => stageOnly === (menuLocale === undefined) &&
+  typeof EditorPreload !== 'undefined' && EditorPreload.localEditorAddons ? <LocalEditorAddonPanel vm={vm} /> : null);
+
 export const renderStageControls = props => <>
   {renderEditorStageControls(props)}
   {props.menuLocale !== undefined && <DesktopSettingsMenu />}
+  <EditorAddonPanelSlot vm={props.vm} menuLocale={props.menuLocale} />
 </>;

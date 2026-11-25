@@ -74,3 +74,23 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+
+.editor-addon-panel {
+    padding: 1rem;
+    min-inline-size: min(24rem, 75vw);
+}
+
+.editor-addon-panel p {
+    margin-block: 0 1rem;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.editor-addon-panel :global(.twextsec-actions) {
+    flex-wrap: wrap;
+}
+
+.editor-addon-panel button {
+    max-inline-size: 100%;
+    overflow-wrap: anywhere;
+}

@@ -10,7 +10,7 @@ const {installLocalEditorAddonDevelopment} = require('../src-main/local-editor-a
 const origin = 'http://localhost:41015';
 const prefix = '/plus-gui/';
 
-test('Desktop loads editor add-ons with live, startup and scoped Redux integration', {timeout: 45_000}, async t => {
+test('Desktop loads editor add-ons with live panels, workspace actions, startup and scoped Redux integration', {timeout: 45_000}, async t => {
   const editor = process.env.TW_PLUS_EDITOR_SOURCE;
   const gui = process.env.E2E_GUI_ROOT;
   assert.ok(editor && path.isAbsolute(editor), 'Set TW_PLUS_EDITOR_SOURCE to the pinned Editor checkout');
@@ -44,11 +44,16 @@ test('Desktop loads editor add-ons with live, startup and scoped Redux integrati
       name: 'Turbo commands', userscripts: [{url: 'command.js', matches: ['projects']}],
       settings: [{id: 'stop-label', type: 'string', default: 'Stop from TurboWarp add-on'}]
     })),
-    fs.writeFile(path.join(turbo, 'command.js'), `export default ({addon}) =>
+    fs.writeFile(path.join(turbo, 'command.js'), `export default ({addon}) => {
       addon.tab.registerEditorCommand('stop', addon.settings.get('stop-label'), () =>
-        ({project: 'stop', label: 'Stopped from TurboWarp add-on'}));`),
+        ({project: 'stop', workspace: 'zoom-in', label: 'Stopped from TurboWarp add-on'}));
+      addon.tab.registerEditorPanel('turbo-tools', 'TurboWarp tools', {
+        actions: [{id: 'inspect', label: 'Inspect', run: () => ({text: 'TurboWarp panel ran its action'})}]
+      });
+    };`),
     fs.writeFile(path.join(plus, 'package.json'), JSON.stringify({
-      name: 'plus-commands', displayName: 'Plus commands', turbowarpPlusEditor: {addon: {entry: 'command.mjs'}}
+      name: 'plus-commands', displayName: 'Plus commands',
+      turbowarpPlusEditor: {addon: {entry: 'command.mjs', permissions: ['workspace.viewport']}}
     })),
     fs.writeFile(path.join(startup, 'package.json'), JSON.stringify({
       name: 'startup-commands', displayName: 'Startup commands',
@@ -64,7 +69,18 @@ test('Desktop loads editor add-ons with live, startup and scoped Redux integrati
   const plusSource = `export function activate(api: {
     registerCommand(id: string, label: string,
       handler: () => Promise<{project?: 'run', label: string}>): void
+    registerPanel(id: string, label: string, info: {
+      text: string,
+      actions: {id: string, label: string, run: () => {text: string, workspace: 'zoom-in' | 'zoom-out'}}[]
+    }): void
   }) {
+    api.registerPanel('workspace', 'Workspace helper VERSION', {
+      text: 'Panel build VERSION',
+      actions: [{id: 'scale', label: 'Change zoom', run: () => ({
+        workspace: 'WORKSPACE_ACTION',
+        text: '<img src="/untrusted.png"> build VERSION'
+      })}]
+    });
     let calls = 0;
     api.registerCommand('run', 'Run build VERSION', async () => {
       if (typeof document !== 'undefined' || typeof process !== 'undefined' ||
@@ -83,15 +99,16 @@ test('Desktop loads editor add-ons with live, startup and scoped Redux integrati
     });
   }`;
   const output = path.join(plus, 'command.mjs');
-  const build = async (version, effect) => {
-    const source = plusSource.replaceAll('VERSION', version).replace('EFFECT', effect);
+  const build = async (version, effect, workspaceAction) => {
+    const source = plusSource.replaceAll('VERSION', version).replace('EFFECT', effect)
+      .replace('WORKSPACE_ACTION', workspaceAction);
     const input = path.join(plus, 'command.ts');
     await fs.writeFile(input, source);
     const {code} = await transform(await fs.readFile(input, 'utf8'), {loader: 'ts', format: 'esm'});
     await fs.writeFile(output + '.tmp', code);
     await fs.rename(output + '.tmp', output);
   };
-  await build('one', '');
+  await build('one', '', 'zoom-in');
   const args = ['--enable-unsafe-swiftshader'];
   if (process.platform === 'darwin') args.push('--single-process', '--no-zygote', '--disable-crash-reporter');
   const browser = await chromium.launch({headless: true, args});
@@ -201,31 +218,60 @@ test('Desktop loads editor add-ons with live, startup and scoped Redux integrati
 
   const command = name => page.getByRole('button', {name, exact: true});
   const actions = () => page.evaluate(() => window.projectActions);
+  const zoom = () => page.evaluate(() => window.ScratchBlocks?.getMainWorkspace()?.scale ?? 0);
+  await expect.poll(zoom).toBeGreaterThan(0);
+  const initialZoom = await zoom();
   await command('Stop from TurboWarp add-on').click();
   await expect(command('Stopped from TurboWarp add-on')).toBeVisible();
+  assert.equal(await zoom(), initialZoom);
   await command('Run build one').click();
   await expect(command('Ran build one #1')).toBeVisible();
   assert.deepEqual(await actions(), ['stopAll']);
 
-  await build('two', "project: 'run'");
+  await command('Workspace helper one').click();
+  const firstPanel = page.getByRole('dialog', {name: 'Workspace helper one'});
+  await expect(firstPanel.getByRole('status')).toHaveText('Panel build one');
+  await firstPanel.getByRole('button', {name: 'Change zoom'}).click();
+  await expect.poll(zoom).toBeGreaterThan(initialZoom);
+  const enlarged = await zoom();
+  await expect(firstPanel.getByRole('status')).toHaveText('<img src="/untrusted.png"> build one');
+  await expect(firstPanel.locator('img[src="/untrusted.png"]')).toHaveCount(0);
+
+  await build('two', "project: 'run'", 'zoom-out');
+  const secondPanel = page.getByRole('dialog', {name: 'Workspace helper two'});
+  await expect(secondPanel.getByRole('status')).toHaveText('Panel build two');
+  await secondPanel.getByRole('button', {name: 'Change zoom'}).click();
+  await expect.poll(zoom).toBeLessThan(enlarged);
+  await secondPanel.getByRole('button', {name: 'Close'}).click();
+
   await command('Run build two').click();
   await expect(command('Ran build two #1')).toBeVisible();
   assert.deepEqual(await actions(), ['stopAll', 'greenFlag']);
   await expect(command('Stopped from TurboWarp add-on')).toBeVisible();
 
-  await fs.writeFile(output, 'export function activate( {');
+  await fs.writeFile(output, `export function activate(api) {
+    api.registerPanel('workspace', 'Invalid workspace panel', {actions: []});
+  }`);
   await openFolders();
   await expect(dialog.getByRole('alert')).toHaveText('JavaScript failed to start. Check the entry point and use of the add-on API.');
   await dialog.getByText('Close', {exact: true}).click();
   await command('Ran build two #1').click();
   await expect(command('Ran build two #2')).toBeVisible();
+  await expect(command('Workspace helper two')).toBeVisible();
+  await expect(command('Invalid workspace panel')).toHaveCount(0);
 
   await openFolders();
   await enabled.click();
   await expect(enabled).not.toBeChecked();
   await dialog.getByText('Close', {exact: true}).click();
   await expect(command('Ran build two #2')).toHaveCount(0);
+  await expect(command('Workspace helper two')).toHaveCount(0);
   await expect(command('Stopped from TurboWarp add-on')).toBeVisible();
+  await command('TurboWarp tools').click();
+  const turboPanel = page.getByRole('dialog', {name: 'TurboWarp tools'});
+  await turboPanel.getByRole('button', {name: 'Inspect'}).click();
+  await expect(turboPanel.getByRole('status')).toHaveText('TurboWarp panel ran its action');
+  await turboPanel.getByRole('button', {name: 'Close'}).click();
 
   await openFolders();
   const turboManifest = path.join(turbo, 'addon.json');
@@ -333,10 +379,10 @@ test('Desktop loads editor add-ons with live, startup and scoped Redux integrati
   await expect(startupRow).toHaveCount(0);
 
   assert.deepEqual(approvals, [
-    {id: 'turbo-commands', scripts: true, activation: 'live', paintClipboard: false},
-    {id: 'plus-commands', scripts: true, activation: 'live', paintClipboard: false},
-    {id: 'disable-paste-offset', scripts: true, activation: 'live', paintClipboard: true},
-    {id: 'startup-commands', scripts: true, activation: 'startup', paintClipboard: false}
+    {id: 'turbo-commands', scripts: true, activation: 'live', paintClipboard: false, viewport: false},
+    {id: 'plus-commands', scripts: true, activation: 'live', paintClipboard: false, viewport: true},
+    {id: 'disable-paste-offset', scripts: true, activation: 'live', paintClipboard: true, viewport: false},
+    {id: 'startup-commands', scripts: true, activation: 'startup', paintClipboard: false, viewport: false}
   ]);
   assert.equal(probeRequests, 1);
   assert.deepEqual(errors, []);

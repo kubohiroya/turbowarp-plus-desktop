@@ -70,10 +70,12 @@ async function readEditorAddon (directory) {
   let activation = 'live';
   let defaults = [];
   const permissions = manifest.turbowarpPlusEditor?.addon?.permissions ?? [];
-  if (!Array.isArray(permissions) || permissions.some(permission => !turbo || permission !== 'paint.clipboard-offset')) {
+  if (!Array.isArray(permissions) || permissions.some(permission =>
+    permission !== 'workspace.viewport' && (!turbo || permission !== 'paint.clipboard-offset'))) {
     return {...row, unavailable: 'LOCAL_ADDON_RUNTIME_UNSUPPORTED'};
   }
   const paintClipboard = permissions.includes('paint.clipboard-offset');
+  const viewport = permissions.includes('workspace.viewport');
   if (turbo) {
     const supportedEntries = entries => Array.isArray(entries) && entries.every(entry =>
       entry && entry.if === undefined && (entry.matches === undefined || (Array.isArray(entry.matches) &&
@@ -113,8 +115,8 @@ async function readEditorAddon (directory) {
     throw error('LOCAL_ADDON_INCOMPLETE');
   }
   const digest = createHash('sha256').update(JSON.stringify([decode(bytes), css, sources])).digest('hex');
-  if (paintClipboard && !sources.length) return {...row, unavailable: 'LOCAL_ADDON_RUNTIME_UNSUPPORTED'};
-  return {...row, activation, defaults, css, sources, digest, paintClipboard};
+  if ((paintClipboard || viewport) && !sources.length) return {...row, unavailable: 'LOCAL_ADDON_RUNTIME_UNSUPPORTED'};
+  return {...row, activation, defaults, css, sources, digest, paintClipboard, viewport};
 }
 
 function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory, confirm, intervalMs = 500}) {
@@ -157,7 +159,7 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
     waiting.set(runtimeId, finish);
     runtime({type: 'prepare', runtimeId, token: session.token, format: session.format, id: session.id,
       defaults: build.defaults, sources: build.sources, startup: startup && build.activation === 'startup',
-      paintClipboard: build.paintClipboard});
+      paintClipboard: build.paintClipboard, viewport: build.viewport});
   });
   const apply = async (session, build, epoch, startup = false) => {
     const runtimeId = build.sources.length ? randomUUID() : null;
@@ -189,7 +191,8 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
     const build = await readEditorAddon(session.directory);
     if (build.id !== session.id || build.format !== session.format || build.unavailable ||
         build.activation !== session.activation || (build.sources.length > 0 && !session.permitsScripts) ||
-        (build.paintClipboard && !session.permitsPaintClipboard)) throw error('LOCAL_ADDON_CHANGED');
+        (build.paintClipboard && !session.permitsPaintClipboard) ||
+        (build.viewport && !session.permitsViewport)) throw error('LOCAL_ADDON_CHANGED');
     return build;
   };
   const update = async epoch => {
@@ -256,7 +259,8 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
         throw error('LOCAL_ADDON_DUPLICATE');
       }
       if (!build.unavailable && !(await confirm(directory.root, build.id, {
-        scripts: build.sources.length > 0, activation: build.activation, paintClipboard: build.paintClipboard
+        scripts: build.sources.length > 0, activation: build.activation, paintClipboard: build.paintClipboard,
+        viewport: build.viewport
       }))) return;
       if (generation !== epoch) return;
       await serial(async () => {
@@ -264,7 +268,8 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
         const {id, format, metadata, unavailable, activation} = build;
         const session = {token: randomUUID(), directory, id, format, metadata, unavailable, activation,
           enabled: !unavailable, applied: false, nextDigest: build.digest ?? null,
-          permitsScripts: Boolean(build.sources?.length), permitsPaintClipboard: build.paintClipboard};
+          permitsScripts: Boolean(build.sources?.length), permitsPaintClipboard: build.paintClipboard,
+          permitsViewport: build.viewport};
         sessions.set(session.token, session);
         try {
           if (session.enabled && activation === 'live') await apply(session, build, epoch);
