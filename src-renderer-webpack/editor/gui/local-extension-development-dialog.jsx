@@ -19,11 +19,11 @@ const messages = locale => locale.startsWith('ja') ? {
 
 const addonMessages = locale => locale.startsWith('ja') ? {
   title: 'エディタアドオンの開発フォルダ',
-  intro: 'チェックしたフォルダのスタイルをエディターに適用し、変更を監視します。チェックを外すとスタイルを取り外します。',
+  intro: 'チェックを入れると、エディタアドオンが有効になります。対応する成果物が更新されると、自動で反映します。チェックを外すと無効になります。',
   formats: {turbowarp: 'TurboWarp 形式', plus: 'Plus Editor 追加機能パッケージ'}
 } : {
   title: 'Editor Add-on Development Folders',
-  intro: 'Checked folders apply their styles to the editor and watch for updates. Uncheck a folder to remove its styles.',
+  intro: 'Check a folder to enable its editor add-on. Updates to supported files are applied automatically. Uncheck it to disable the add-on.',
   formats: {turbowarp: 'TurboWarp format', plus: 'Plus Editor add-on package'}
 };
 

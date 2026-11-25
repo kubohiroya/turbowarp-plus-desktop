@@ -861,9 +861,9 @@ class EditorWindow extends ProjectRunningWindow {
           const ja = settings.locale?.startsWith('ja');
           const result = await dialog.showMessageBox(this.window, {
             type: 'question',
-            message: ja ? 'エディタアドオンのスタイルを適用しますか？' : 'Apply the editor add-on styles?',
-            detail: ja ? `${id} のスタイルでエディターの表示を変更し、このフォルダでの変更を監視します。\n\n${directory}` :
-              `Styles from ${id} will change the editor interface and update when this folder changes.\n\n${directory}`,
+            message: ja ? 'エディタアドオンを有効にしますか？' : 'Enable this editor add-on?',
+            detail: ja ? `このフォルダのエディタアドオン ${id} を有効にします。対応する成果物が更新されると、自動で反映します。\n\n${directory}` :
+              `This enables the editor add-on ${id} and automatically applies updates to supported files in this folder.\n\n${directory}`,
             buttons: ja ? ['キャンセル', '監視を開始'] : ['Cancel', 'Start Watching'],
             defaultId: 0, cancelId: 0, noLink: true
           });

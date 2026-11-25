@@ -3,20 +3,20 @@ import {LocalExtensionDevelopmentDialog} from './local-extension-development-dia
 
 const errors = locale => locale.startsWith('ja') ? {
   LOCAL_ADDON_RUNTIME_UNSUPPORTED: 'この形式のスクリプトや起動時の追加機能には、対応する組み込み口が必要です。',
-  LOCAL_ADDON_STYLE_UNSUPPORTED: '外部リソースを参照するスタイルなど、この開発モードで扱えない CSS が含まれています。',
+  LOCAL_ADDON_STYLE_UNSUPPORTED: 'この CSS には、外部リソースの参照など、この開発モードで使えない記述があります。',
   LOCAL_ADDON_DUPLICATE: '同じフォルダ、または同じ ID のアドオンが登録されています。',
-  LOCAL_ADDON_REVIEW_FAILED: 'アドオンを読み込めませんでした。フォルダの設定とスタイルの出力を確認してください。',
+  LOCAL_ADDON_REVIEW_FAILED: 'アドオンを読み込めませんでした。フォルダの設定と CSS の出力を確認してください。',
   LOCAL_ADDON_CHANGED: '登録時と異なる種類または ID のため、最後に適用した版を維持しています。',
   LOCAL_ADDON_BOUNDARY: 'フォルダの参照先が変わったため、最後に適用した版を維持しています。',
-  LOCAL_ADDON_INCOMPLETE: 'スタイルの出力を確認できないため、最後に適用した版を維持しています。'
+  LOCAL_ADDON_INCOMPLETE: 'CSS の出力を確認できないため、最後に適用した版を維持しています。'
 } : {
   LOCAL_ADDON_RUNTIME_UNSUPPORTED: 'These scripts or startup hooks need a compatible editor integration.',
-  LOCAL_ADDON_STYLE_UNSUPPORTED: 'The stylesheet uses external resources or CSS outside this development profile.',
+  LOCAL_ADDON_STYLE_UNSUPPORTED: 'This CSS contains external resources or syntax outside this development profile.',
   LOCAL_ADDON_DUPLICATE: 'This folder or add-on ID is already registered.',
-  LOCAL_ADDON_REVIEW_FAILED: 'Could not load the add-on. Check the folder configuration and stylesheet.',
+  LOCAL_ADDON_REVIEW_FAILED: 'Could not load the add-on. Check the folder configuration and CSS output.',
   LOCAL_ADDON_CHANGED: 'The add-on ID or kind changed. The last applied version is still active.',
   LOCAL_ADDON_BOUNDARY: 'The folder changed location. The last applied version is still active.',
-  LOCAL_ADDON_INCOMPLETE: 'The stylesheet could not be verified. The last applied version is still active.'
+  LOCAL_ADDON_INCOMPLETE: 'The CSS output could not be verified. The last applied version is still active.'
 };
 
 export function LocalEditorAddonDevelopmentDialog ({locale, host, onClose}) {
