@@ -9,7 +9,7 @@
 
 ## ヘッドレス検証
 
-`npm run webpack:plus -- <Editorの固定チェックアウト> <GUIの固定チェックアウト>` で Desktop 用レンダラーを作ります。開発ビルドの差し替えに対応した Loader と、別窓のテスト実行に対応したテスト実行パッケージを使います。
+固定 Editor のチェックアウトで `npm ci` を実行すると、ロックファイルから Loader `0.15.0` とテスト実行パッケージ `0.3.1` が入ります。`npm run webpack:plus -- <Editorの固定チェックアウト> <GUIの固定チェックアウト>` で Desktop 用レンダラーを作ります。
 
 ```sh
 node --test test/local-extension-development.test.js
