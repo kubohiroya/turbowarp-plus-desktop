@@ -1,12 +1,13 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const net = require('node:net');
+const {createHash} = require('node:crypto');
 const {tmpdir} = require('node:os');
 const path = require('node:path');
 const {setTimeout: delay} = require('node:timers/promises');
 const {test} = require('node:test');
 const {openDirectory, readDevelopmentFile} = require('../src-main/local-extension-development');
-const {readSourceSnapshot, runSourceWorker} = require('../src-main/standard-extension-source-build');
+const {createStandardExtensionBuilder, readSourceSnapshot, runSourceWorker} = require('../src-main/standard-extension-source-build');
 
 test('a source snapshot includes only bounded profile inputs', async t => {
   const root = await fs.mkdtemp(path.join(tmpdir(), 'tw-source-input-'));
@@ -61,6 +62,7 @@ test('macOS enforces file, process, network and environment isolation plus worke
     await fs.writeFile(worker, `
       const fs = require('node:fs');
       const net = require('node:net');
+const {createHash} = require('node:crypto');
       const {spawnSync} = require('node:child_process');
       const denial = attempt => { try { attempt(); return 'allowed'; } catch (error) { return error.code; } };
       const results = {
@@ -97,4 +99,49 @@ test('macOS enforces file, process, network and environment isolation plus worke
     controller.abort();
     await assert.rejects(running, {code: 'LOCAL_EXTENSION_SOURCE_CANCELLED'});
     t.diagnostic('oversized output, deadlines and cancellation terminate the worker');
+  });
+
+
+const resources = process.env.TW_PLUS_SOURCE_BUILD_RESOURCES;
+test('the packaged compiler builds the standard profile from a bounded snapshot',
+  {skip: process.platform !== 'darwin' || !binary || !resources, timeout: 30_000}, async t => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), 'tw-bundled-compiler-'));
+    t.after(() => fs.rm(root, {recursive: true, force: true}));
+    await fs.mkdir(path.join(root, 'src'));
+    const inputs = {
+      'extension-build.json': JSON.stringify({formatVersion: 1, profile: 'turbowarp-typescript-v1',
+        entry: 'src/index.ts', settings: 'src/extension-config.json', blocks: 'src/block-definitions.json',
+        lockfile: 'pnpm-lock.yaml', dependencies: 'none'}),
+      'package.json': JSON.stringify({name: 'compiler-fixture', scripts: {build: 'exit 41', prepare: 'exit 42'}}),
+      'pnpm-lock.yaml': "lockfileVersion: '9.0'",
+      'src/extension-config.json': JSON.stringify({id: 'fixture', slug: 'compiler-fixture', name: 'Compiler fixture',
+        description: 'Standard build packaging test', author: 'Test', license: 'MPL-2.0', unsandboxed: false,
+        docsURI: 'https://example.com/', blockIconURI: 'data:image/svg+xml;base64,PHN2Zy8+'}),
+      'src/block-definitions.json': JSON.stringify({extensionName: 'Compiler fixture',
+        blocks: [{opcode: 'value', blockType: 'REPORTER', text: 'value'}]}),
+      'src/index.ts': 'const value: number = 41; Scratch.extensions.register({value});',
+      'vite.config.ts': 'throw new Error("Project Vite config must never run");'
+    };
+    await Promise.all(Object.entries(inputs).map(([file, value]) => fs.writeFile(path.join(root, file), value)));
+
+    const builder = createStandardExtensionBuilder({isPackaged: true, resources, executable: binary});
+    assert.ok(builder, 'The bundle must provide the packaged compiler');
+    const directory = await openDirectory(root);
+    const {signal} = new AbortController();
+    const compile = async () => builder.build(await builder.read(directory, signal, readDevelopmentFile), signal);
+    const first = await compile();
+    assert.deepEqual(await compile(), first);
+    const descriptor = JSON.parse(first.get('extension-development.json'));
+    assert.equal(descriptor.id, 'fixture');
+    assert.equal(descriptor.bundle.file, 'compiler-fixture.js');
+    for (const part of [descriptor.bundle, descriptor.api, descriptor.sourceMap]) {
+      assert.equal(createHash('sha256').update(first.get(part.file)).digest('hex'), part.sha256);
+    }
+    assert.deepEqual(JSON.parse(first.get(descriptor.sourceMap.file)).sources, ['src/index.ts']);
+    await fs.writeFile(path.join(root, 'src/index.ts'), 'const value: number = 42; Scratch.extensions.register({value});');
+    const next = JSON.parse((await compile()).get('extension-development.json'));
+    assert.notEqual(next.bundle.sha256, descriptor.bundle.sha256);
+    assert.equal(next.api.sha256, descriptor.api.sha256);
+    await assert.rejects(fs.access(path.join(root, 'node_modules')), {code: 'ENOENT'});
+    await assert.rejects(fs.access(path.join(root, 'dist')), {code: 'ENOENT'});
   });

@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {createReadStream, promises as fs} from 'node:fs';
 import path from 'node:path';
 import asar from '@electron/asar';
+import {FuseState, FuseV1Options, getCurrentFuseWire} from '@electron/fuses';
 import {Arch, build, Platform} from 'electron-builder';
 import {verifyEditorWorkbench} from './editor-workbench-pin.mjs';
 
@@ -69,6 +70,15 @@ const builtFiles = await build({
         await fs.access(path.join(toolchain, 'dist/standard-extension-build.js'));
         const nativeBinding = await readJson(path.join(binding, 'package.json'));
         await fs.access(path.join(binding, nativeBinding.main));
+        const executable = path.join(resources, '..', 'MacOS', packager.appInfo.productFilename);
+        const fuses = await getCurrentFuseWire(executable);
+        assert.equal(fuses[FuseV1Options.RunAsNode], FuseState.ENABLE, 'The packaged compiler requires Electron Node mode');
+        execFileSync(process.execPath, ['--test', 'test/local-extension-source-build.test.js'], {
+          cwd: desktop,
+          env: {...process.env, TW_PLUS_SOURCE_BUILD_ELECTRON: executable, TW_PLUS_SOURCE_BUILD_RESOURCES: resources},
+          stdio: 'inherit',
+          timeout: 60_000
+        });
       }
       if (crossBuild) {
         assert.ok(!asar.listPackage(archive).some(filename => filename.endsWith('.node')),

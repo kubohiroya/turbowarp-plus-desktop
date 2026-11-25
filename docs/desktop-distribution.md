@@ -21,7 +21,7 @@ Windows 用 NSIS は Ubuntu でクロスビルドする。Wine は NSIS のア�
 - Desktop の `LICENSE`、family package のライセンスと索引、ソースと固定版を示す `source-info.json`
 - 公式素材と Packager の取得元・ハッシュを記録した `library-files.json` と `packager.json`
 
-CI で行うのは生成と内容の検査まで。開発用 artifact では配布用証明書、macOS 公証、GitHub Release、更新通知を使わない。製品版の同梱カタログとそのライセンスは #6、署名と対応環境での受け入れは #9 で管理する。
+macOS の CI は、パッケージに同梱した Electron とコンパイラーで標準プロファイルを実際にビルドし、隔離・制限・取消をヘッドレスで検証する。開発用 artifact では配布用証明書、macOS 公証、GitHub Release、更新通知を使わない。製品版の同梱カタログとそのライセンスは #6、署名と対応環境での受け入れは #9 で管理する。
 
 ## Desktop のアイコン
 
