@@ -30,6 +30,8 @@ const mergePlanShare = {
     mergePlanReader = undefined;
     await ipcRenderer.invoke('merge-plan-mcp-stop', token);
   }
+};
+
 const subscribe = (name, callback) => {
   const listener = (_event, value) => callback(value);
   ipcRenderer.on(name, listener);

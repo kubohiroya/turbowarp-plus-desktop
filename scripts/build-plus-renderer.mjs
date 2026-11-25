@@ -59,6 +59,7 @@ try {
   await fs.access(path.join(stage, 'gui.html'));
   await fs.access(path.join(stage, 'addons.html'));
   await fs.access(path.join(stage, 'git-project-preview.html'));
+  await fs.access(path.join(stage, 'test-frame.html'));
   const familyNotices = await buildFamilyNotices(stage, [
     {origin: 'scratch-gui', directory: gui},
     {origin: 'turbowarp-plus-editor', directory: editor, includeDev: true}

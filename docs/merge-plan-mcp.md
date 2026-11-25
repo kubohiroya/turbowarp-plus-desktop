@@ -7,11 +7,13 @@
 | MCP ツール | 取得内容 |
 | --- | --- |
 | `merge_plan_list_generations` | 候補ID、世代ID、世代番号、内容ID、元のコミット、競合の選択。任意で `offset` と `limit`。 |
-| `merge_plan_get_generation` | `generationId` で指定した世代の詳細と、保存されたファイルのパス・バイト数。任意で `offset` と `limit`。 |
+| `merge_plan_get_generation` | `generationId` で指定した世代の詳細、保存されたファイルのパス・バイト数、直近のテスト集計 `latestTest`。任意で `offset` と `limit`。 |
 | `merge_plan_read_file` | `generationId` と `path` で指定したファイルの内容。ブロックを読むには、パス一覧から `project.source.json` を指定します。 |
 | `merge_plan_current_playtest` | 試遊の候補・世代・内容・セッションIDと、停止ブロック、指定した値、デバッガーのログ。プレーヤーを閉じると `playtest` は `null`。 |
 
 ファイルの `offset` と `limit` の単位はバイトです。`nextOffset` がある場合は次の読み取りに渡してください。`encoding` は `utf8` または `base64` です。UTF-8文字の途中で区切られた範囲も `base64` でバイト列を取得できます。
+
+`latestTest` は `generationId` と `contentId` に対応する完了時刻 `finishedAt`、件数 `total`、結果別の件数 `counts` を返します。未実行の場合は `null` です。テストの実行と失敗したチェックの確認はエディタで行います。
 
 共有中に候補の「試遊」を開くと、その試遊内でブロックのコンテキストメニューからブレークポイントを設定できます。そこで停止したブロックや、マージの競合で停止した位置を `observation.stop` から取得できます。停止位置の理由は `breakpoint` または `merge-conflict` です。停止中のスレッドを特定できる場合は `targetId`、`threadIndex`、`topBlockId` も返します。
 
