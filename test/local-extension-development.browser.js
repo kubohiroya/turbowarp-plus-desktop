@@ -1,14 +1,12 @@
 const assert = require('node:assert/strict');
-const {execFile} = require('node:child_process');
+const {execFile, spawn} = require('node:child_process');
 const {createHash} = require('node:crypto');
-const {EventEmitter} = require('node:events');
+const {EventEmitter, once} = require('node:events');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const {tmpdir} = require('node:os');
 const {test} = require('node:test');
 const {promisify} = require('node:util');
-const {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild} = require('../src-main/local-extension-development');
-const {installLocalEditorAddonDevelopment} = require('../src-main/local-editor-addon-development');
 
 const exec = promisify(execFile);
 const origin = 'http://localhost:41015';
@@ -23,17 +21,31 @@ test('two independently watched extension folders update one Desktop project and
     const editor = process.env.TW_PLUS_EDITOR_SOURCE;
     const template = process.env.TW_PLUS_EXTENSION_TEMPLATE_ROOT;
     const testBundle = process.env.TW_PLUS_TEST_EXTENSION_JS;
+    const packagedApp = process.env.TW_PLUS_DESKTOP_APP_SOURCE;
+    const expectSourceMap = process.env.TW_PLUS_EXPECT_DEVELOPMENT_SOURCE_MAP === '1';
+    const expectRuntimeDiagnostic = process.env.TW_PLUS_EXPECT_RUNTIME_DIAGNOSTIC === '1';
     for (const value of [editor, template, testBundle]) assert.ok(value && path.isAbsolute(value),
       'Set TW_PLUS_EDITOR_SOURCE, TW_PLUS_EXTENSION_TEMPLATE_ROOT and TW_PLUS_TEST_EXTENSION_JS');
+    if (packagedApp) assert.ok(path.isAbsolute(packagedApp), 'TW_PLUS_DESKTOP_APP_SOURCE must be an absolute path');
+    const app = packagedApp || path.resolve(__dirname, '..');
+    const {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild} =
+      require(path.join(app, 'src-main/local-extension-development'));
+    const {installLocalEditorAddonDevelopment} = require(path.join(app, 'src-main/local-editor-addon-development'));
     const {chromium, expect} = require(path.join(editor, 'node_modules/@playwright/test'));
     const Zip = require(path.join(editor, 'node_modules/@turbowarp/jszip'));
     const {project} = require(path.join(editor, 'test/e2e/extension-loader/project.cts'));
-    const renderer = path.resolve(__dirname, '../dist-renderer-webpack/editor/plus-gui');
-    const pin = require('../config/plus-renderer.json');
+    const renderer = path.join(app, 'dist-renderer-webpack/editor/plus-gui');
+    const pin = require(path.join(app, 'config/plus-renderer.json'));
     const info = JSON.parse(await fs.readFile(path.join(renderer, 'build-info.json'), 'utf8'));
     const {stdout} = await exec('git', ['-C', editor, 'rev-parse', 'HEAD']);
     assert.equal(info.editorRevision, pin.editorRevision);
     assert.equal(info.editorRevision, stdout.trim());
+    if (packagedApp) {
+      const pins = require(path.join(editor, 'site/source.json'));
+      const {stdout: desktopSHA} = await exec('git', ['rev-parse', 'HEAD'], {cwd: path.resolve(__dirname, '..')});
+      assert.equal(info.desktopDirty, false);
+      assert.deepEqual([info.desktopRevision, info.guiRevision, info.vmRevision], [desktopSHA.trim(), pins.guiRevision, pins.vmRevision]);
+    }
 
     const worktree = await fs.mkdtemp(path.join(tmpdir(), 'tw-local-extension-'));
     t.after(() => fs.rm(worktree, {recursive: true, force: true}));
@@ -51,14 +63,22 @@ test('two independently watched extension folders update one Desktop project and
     await fs.writeFile(metadataPath, JSON.stringify({...metadata, id: 'alternategreeting', name: 'Alternate Greeting'}));
     const sourcePath = path.join(folder, 'src/extension.ts');
     const correctedSource = await fs.readFile(sourcePath, 'utf8');
-    const faultySource = correctedSource.replace('Hello, {name}!', 'Wrong, {name}!');
+    const throwLine = '    if (args.NAME === "diagnostic") throw new Error("fixture runtime failure");';
+    let faultySource = correctedSource.replace('Hello, {name}!', 'Wrong, {name}!');
+    if (expectRuntimeDiagnostic) faultySource = faultySource.replace(
+      'public hello(args: {NAME: unknown}): string {\n', `public hello(args: {NAME: unknown}): string {\n${throwLine}\n`);
     assert.notEqual(faultySource, correctedSource);
     const build = async (source, directory = folder) => {
       await fs.writeFile(path.join(directory, 'src/extension.ts'), source);
-      await exec(process.execPath, [path.join(directory, 'node_modules/vite/bin/vite.js'), 'build'], {cwd: directory});
+      await exec(process.execPath, [path.join(directory, 'node_modules/vite/bin/vite.js'), 'build', '--mode', 'development'],
+        {cwd: directory});
       return readDevelopmentBuild(await openDirectory(directory));
     };
     const [faulty, otherInitial] = await Promise.all([build(faultySource), build(faultySource, otherFolder)]);
+    if (expectSourceMap) {
+      assert.match(faulty.sourceMapSHA256, /^[a-f0-9]{64}$/u);
+      assert.match(otherInitial.sourceMapSHA256, /^[a-f0-9]{64}$/u);
+    }
     const testBytes = await fs.readFile(testBundle);
     assert.equal(createHash('sha256').update(testBytes).digest('hex'), testHash);
     const blocks = {
@@ -69,6 +89,16 @@ test('two independently watched extension folders update one Desktop project and
       greeting: {opcode: `${faulty.id}_hello`, next: null, parent: assertId,
         inputs: {NAME: [1, [10, 'Scratch']]}, fields: {}, shadow: false, topLevel: false}
     };
+    if (expectRuntimeDiagnostic) {
+      Object.assign(blocks, {
+        'diagnostic-start': {opcode: 'event_whenflagclicked', next: 'diagnostic-say', parent: null,
+          inputs: {}, fields: {}, shadow: false, topLevel: true, x: 260, y: 40},
+        'diagnostic-say': {opcode: 'looks_say', next: null, parent: 'diagnostic-start',
+          inputs: {MESSAGE: [2, 'diagnostic-greeting']}, fields: {}, shadow: false, topLevel: false},
+        'diagnostic-greeting': {opcode: `${faulty.id}_hello`, next: null, parent: 'diagnostic-say',
+          inputs: {NAME: [1, [10, 'diagnostic']]}, fields: {}, shadow: false, topLevel: false}
+      });
+    }
     const zip = await Zip.loadAsync(await project({id: faulty.id, execution: 'sandboxed', code: faulty.bytes,
       sha256: faulty.sha256, stageBlocks: blocks, embeddedPath: `extensions/${faulty.id}.js`}));
     const json = JSON.parse(await zip.file('project.json').async('string'));
@@ -192,7 +222,10 @@ test('two independently watched extension folders update one Desktop project and
           stop: (...args) => window.invokeDesktopIPC('local-extension-stop', ...args),
           setEnabled: (...args) => window.invokeDesktopIPC('local-extension-set-enabled', ...args),
           authorize: (...args) => window.invokeDesktopIPC('local-extension-authorize', ...args),
+          retainDiagnostics: (...args) => window.invokeDesktopIPC('local-extension-retain-diagnostics', ...args),
+          resolveDiagnostic: (...args) => window.invokeDesktopIPC('local-extension-resolve-diagnostic', ...args),
           onBuild: listener => subscribe('local-extension-build', listener),
+          onArtifacts: listener => subscribe('local-extension-artifacts', listener),
           onStopped: listener => subscribe('local-extension-stopped', listener)
         }
       };
@@ -238,9 +271,18 @@ test('two independently watched extension folders update one Desktop project and
     const secondRow = manager.locator('li').filter({hasText: otherInitial.id});
     await expect(firstRow.getByRole('checkbox')).toBeChecked();
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
-    await expect(firstRow.locator('code')).toHaveText(await fs.realpath(folder));
-    await expect(secondRow.locator('code')).toHaveText(await fs.realpath(otherFolder));
+    await expect(firstRow.locator('code:not([title])')).toHaveText(await fs.realpath(folder));
+    await expect(secondRow.locator('code:not([title])')).toHaveText(await fs.realpath(otherFolder));
     assert.deepEqual(consent, [faulty.id, otherInitial.id]);
+    if (expectRuntimeDiagnostic) {
+      await expect(firstRow.locator('code[title]')).toHaveAttribute('title', faulty.sha256);
+      await page.evaluate(() => { window.vm.greenFlag(); });
+      const line = faultySource.split('\n').indexOf(throwLine) + 1;
+      const column = throwLine.indexOf('new Error') + 1;
+      await expect(firstRow.getByRole('status')).toHaveText(`Extension block runtime error src/extension.ts:${line}:${column}`);
+      await expect(secondRow.getByRole('status')).toHaveCount(0);
+      t.diagnostic(`runtime exception resolved to src/extension.ts:${line}:${column}`);
+    }
     await manager.getByText('Close', {exact: true}).click();
 
     try {
@@ -260,9 +302,6 @@ test('two independently watched extension folders update one Desktop project and
     await expect(result.locator('code')).toHaveText(['"Hello, Scratch!"', '"Wrong, Scratch!"']);
     await expect(result.getByRole('button', {name: 'Show block'})).toHaveAttribute('data-block-id', assertId);
 
-    const [corrected, otherCorrected] = await Promise.all([build(correctedSource), build(correctedSource, otherFolder)]);
-    assert.notEqual(faulty.sha256, corrected.sha256);
-    assert.equal(faulty.apiSHA256, corrected.apiSHA256);
     const installed = (id = faulty.id) => page.evaluate(extensionId => {
       try {
         return JSON.parse(window.vm.toJSON(undefined, {allowOptimization: false}))
@@ -271,12 +310,37 @@ test('two independently watched extension folders update one Desktop project and
         if (error.code !== 'PROJECT_BUSY') throw error;
       }
     }, id);
+    const watch = spawn(process.execPath,
+      [path.join(folder, 'node_modules/vite/bin/vite.js'), 'build', '--watch', '--mode', 'development'],
+      {cwd: folder, stdio: ['ignore', 'pipe', 'pipe']});
+    const exited = once(watch, 'exit');
+    const stopWatch = () => { if (watch.exitCode === null && watch.signalCode === null) watch.kill(); };
+    t.after(async () => { stopWatch(); await exited.catch(() => {}); });
+    let watchOutput = '';
+    for (const stream of [watch.stdout, watch.stderr]) stream.setEncoding('utf8').on('data', chunk => { watchOutput += chunk; });
+    await expect.poll(() => watchOutput, {timeout: 10_000}).toContain('built in');
+    const previousOutput = watchOutput.length;
+    await fs.writeFile(sourcePath, faultySource + '\nconst = ;\n');
+    await expect.poll(() => watchOutput.slice(previousOutput), {timeout: 10_000}).toMatch(/(?:Transform failed|Build failed)/iu);
+    assert.match(watchOutput.slice(previousOutput), /src[\/]extension\.ts:\d+:\d+/u);
+    assert.equal(await installed(), faulty.sha256);
+    const failedBuildOutput = watchOutput.length;
+    const fixedAt = performance.now();
+    await fs.writeFile(sourcePath, correctedSource);
+    const otherCorrected = await build(correctedSource, otherFolder);
+    await expect.poll(() => watchOutput.slice(failedBuildOutput), {timeout: 10_000}).toContain('built in');
+    const corrected = await readDevelopmentBuild(await openDirectory(folder));
+    stopWatch();
+    await exited;
+    assert.notEqual(faulty.sha256, corrected.sha256);
+    assert.equal(faulty.apiSHA256, corrected.apiSHA256);
+    if (expectSourceMap) assert.match(corrected.sourceMapSHA256, /^[a-f0-9]{64}$/u);
     try {
       await expect.poll(installed, {timeout: 10_000}).toBe(corrected.sha256);
+      t.diagnostic(`one local sample from TypeScript write to a detected live update: ${Math.round(performance.now() - fixedAt)} ms`);
       await expect.poll(() => installed(otherInitial.id)).toBe(otherCorrected.sha256);
     } catch (error) {
-      t.diagnostic(JSON.stringify(activity));
-      t.diagnostic(await page.getByRole('dialog').allTextContents().then(values => values.join('\n')));
+      t.diagnostic(JSON.stringify({activity, alerts, failures, installed: await installed(), expected: corrected.sha256}));
       throw error;
     }
     await expect(review).toHaveCount(0);
@@ -292,6 +356,23 @@ test('two independently watched extension folders update one Desktop project and
     await openManager();
     await expect(firstRow.getByRole('checkbox')).toBeChecked();
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
+    const activeBuild = firstRow.locator('code[title]');
+    await expect(activeBuild).toHaveAttribute('title', corrected.sha256);
+    if (expectRuntimeDiagnostic) {
+      await page.evaluate(() => {
+        window.vm.runtime.once('SAY', (_target, _type, message) => { window.developmentDiagnosticGreeting = message; });
+        window.vm.greenFlag();
+      });
+      await expect.poll(() => page.evaluate(() => window.developmentDiagnosticGreeting)).toBe('Hello, diagnostic!');
+      await expect(firstRow.getByText(/Extension block runtime error/u)).toHaveCount(0);
+    }
+    const markerPath = path.join(folder, 'dist', 'extension-development.json');
+    const completedMarker = await fs.readFile(markerPath);
+    await fs.writeFile(markerPath, '{');
+    await expect(firstRow.getByRole('status')).toHaveText('Waiting for a complete and verified build.');
+    await expect(activeBuild).toHaveAttribute('title', corrected.sha256);
+    await fs.writeFile(markerPath, completedMarker);
+    await expect(firstRow.getByRole('status')).toHaveCount(0);
     await firstRow.getByRole('checkbox').uncheck();
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
     const changedAgain = correctedSource.replace('Hello, {name}!', 'Hello again, {name}!');
@@ -307,6 +388,9 @@ test('two independently watched extension folders update one Desktop project and
     assert.equal(incompatible.apiSHA256, corrected.apiSHA256);
     await expect(firstRow.getByRole('alert')).toHaveText('The new build could not be applied. The previous build is still active.');
     assert.equal(await installed(), firstPaused.sha256);
+    await build(changedAgain);
+    await expect(firstRow.getByRole('alert')).toHaveCount(0);
+    await expect(activeBuild).toHaveAttribute('title', firstPaused.sha256);
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
     assert.deepEqual(consent, [faulty.id, otherInitial.id]);
     t.diagnostic('an incompatible registered opcode was rejected, and the corrected build was restored');
