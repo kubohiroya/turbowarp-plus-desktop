@@ -1,42 +1,55 @@
 import getStageControls from '@tw-plus/pinned-stage-controls';
+import addonRedux from 'scratch-gui/src/addons/redux.js';
+
+const paintSet = 'scratch-paint/clipboard/SET';
+const paintIncrement = 'scratch-paint/clipboard/INCREMENT_PASTE_OFFSET';
+const paintClear = 'scratch-paint/clipboard/CLEAR_PASTE_OFFSET';
 
 const validLabel = value => typeof value === 'string' && value.length <= 80 && value.trim();
-const validCommands = commands => Array.isArray(commands) && commands.length > 0 && commands.length <= 12 &&
+const validCommands = commands => Array.isArray(commands) && commands.length <= 12 &&
   commands.every(command => typeof command?.id === 'string' && /^[a-zA-Z0-9_-]{1,50}$/.test(command.id) &&
     validLabel(command.label)) && new Set(commands.map(command => command.id)).size === commands.length;
 
 let connection;
 
-export function ensureEditorAddonRuntime (vm, host) {
-  if (!host || connection?.vm === vm) return;
+export function startEditorAddonRuntime (vm, host) {
+  if (!host) return;
+  if (connection?.vm === vm) return connection.ready;
   connection?.dispose();
   const {api} = getStageControls(vm);
   const staged = new Map();
   const active = new Map();
-  const disposeBuild = build => {
+  let paintOffsetOverridden = false;
+  const disposeBuild = (build, restorePaint) => {
     if (!build) return;
+    build.stopPaint?.();
+    if (restorePaint && build.stopPaint && paintOffsetOverridden &&
+        !Array.from(active.values()).some(other => other !== build && other.stopPaint)) {
+      paintOffsetOverridden = false;
+      if (addonRedux.state.scratchPaint?.clipboard?.pasteOffset === 0) addonRedux.dispatch({type: paintIncrement});
+    }
     clearTimeout(build.timeout);
     clearTimeout(build.invocation?.timeout);
     for (const button of build.buttons) button.dispose();
     build.port.close();
     build.frame.remove();
   };
-  const remove = (builds, key) => {
-    disposeBuild(builds.get(key));
+  const remove = (builds, key, restorePaint = false) => {
+    disposeBuild(builds.get(key), restorePaint);
     builds.delete(key);
   };
   const reset = () => {
     for (const key of staged.keys()) remove(staged, key);
     for (const key of active.keys()) remove(active, key);
   };
-  const prepare = ({runtimeId, token, format, id, defaults, sources}) => {
+  const prepare = ({runtimeId, token, format, id, defaults, sources, startup, paintClipboard}) => {
     const frame = document.createElement('iframe');
     frame.hidden = true;
     frame.title = 'Editor add-on runtime';
     frame.setAttribute('sandbox', 'allow-scripts');
     frame.src = new URL('editor-addon-runtime.html', document.baseURI).href;
     const {port1, port2} = new MessageChannel();
-    const build = {frame, port: port1, commands: null, buttons: [], invocation: null};
+    const build = {frame, port: port1, commands: null, buttons: [], invocation: null, paintEvents: false};
     staged.set(runtimeId, build);
 
     const prepared = commands => {
@@ -49,9 +62,18 @@ export function ensureEditorAddonRuntime (vm, host) {
     build.timeout = setTimeout(() => prepared(null), 4000);
     port1.onmessage = ({data}) => {
       if (data?.type === 'ready' && staged.get(runtimeId) === build && !build.commands) {
-        prepared(validCommands(data.commands) ? data.commands : null);
+        build.paintEvents = paintClipboard && data.paintEvents === true;
+        const accepted = validCommands(data.commands) && (data.commands.length > 0 || build.paintEvents);
+        prepared(accepted ? data.commands : null);
       } else if (data?.type === 'failed') {
         prepared(null);
+      } else if (data?.type === 'paint-result' && active.get(token) === build &&
+          build.paintRequest && data.request === build.paintRequest) {
+        build.paintRequest = null;
+        if (data.clearOffset === true) {
+          paintOffsetOverridden = true;
+          addonRedux.dispatch({type: paintClear});
+        }
       } else if (data?.type === 'result' && active.get(token) === build &&
           build.invocation && build.invocation.request === data.request) {
         const {button, timeout} = build.invocation;
@@ -63,7 +85,8 @@ export function ensureEditorAddonRuntime (vm, host) {
       }
     };
     frame.addEventListener('load', () => {
-      frame.contentWindow.postMessage({type: 'local-editor-addon-connect', format, id, defaults, sources}, '*', [port2]);
+      frame.contentWindow.postMessage(
+        {type: 'local-editor-addon-connect', format, id, defaults, sources, startup, paintClipboard}, '*', [port2]);
     }, {once: true});
     document.body.appendChild(frame);
   };
@@ -82,6 +105,16 @@ export function ensureEditorAddonRuntime (vm, host) {
       return button;
     });
   };
+  const attachPaintEvents = build => {
+    const stateChanged = ({detail}) => {
+      const action = detail.action.type;
+      if (action !== paintSet && action !== paintIncrement) return;
+      build.paintRequest = crypto.randomUUID();
+      build.port.postMessage({type: 'paint', action, request: build.paintRequest});
+    };
+    addonRedux.addEventListener('statechanged', stateChanged);
+    build.stopPaint = () => addonRedux.removeEventListener('statechanged', stateChanged);
+  };
   const projectLoaded = () => {
     for (const [token, build] of active) {
       clearTimeout(build.invocation?.timeout);
@@ -98,20 +131,22 @@ export function ensureEditorAddonRuntime (vm, host) {
       const build = staged.get(message.runtimeId);
       if (!build?.commands) break;
       staged.delete(message.runtimeId);
-      remove(active, message.token);
+      remove(active, message.token, !build.paintEvents);
       active.set(message.token, build);
+      if (build.paintEvents) attachPaintEvents(build);
       register(message.token, build);
       break;
     }
     case 'discard': remove(staged, message.runtimeId); break;
-    case 'remove': remove(active, message.token); break;
+    case 'remove': remove(active, message.token, true); break;
     case 'reset': reset(); break;
     }
   });
-  void host.ready().catch(() => {});
-  connection = {vm, dispose: () => {
+  const ready = host.ready().catch(() => {});
+  connection = {vm, ready, dispose: () => {
     unsubscribe();
     vm.removeListener('PROJECT_LOADED', projectLoaded);
     reset();
   }};
+  return ready;
 }

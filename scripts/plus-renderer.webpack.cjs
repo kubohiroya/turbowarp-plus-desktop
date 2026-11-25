@@ -15,6 +15,7 @@ const hostProvider = config.plugins.find(plugin => plugin.definitions?.__TW_GUI_
 if (!hostProvider) throw new Error('The pinned Editor GUI host connection has changed');
 hostProvider.definitions.__TW_GUI_HOST__ = path.join(gui, 'plus-gui-host.jsx');
 config.resolve.alias['@tw-plus/pinned-gui-host$'] = editorHost;
+config.resolve.alias['./editor-addon-startup.js$'] = path.join(gui, 'local-editor-addon-runtime.js');
 config.resolve.alias['@tw-plus/pinned-stage-controls$'] =
   editorRequire.resolve('@kubohiroya/turbowarp-plus-editor-workbench/stage-controls');
 config.resolve.alias['./local-extension-authoring.js$'] =

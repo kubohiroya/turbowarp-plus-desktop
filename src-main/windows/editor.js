@@ -857,7 +857,7 @@ class EditorWindow extends ProjectRunningWindow {
           });
           return result.canceled ? null : result.filePaths[0];
         },
-        confirm: async (directory, id, {scripts, activation}) => {
+        confirm: async (directory, id, {scripts, activation, paintClipboard}) => {
           const ja = settings.locale?.startsWith('ja');
           const detail = scripts ?
             (ja ? `エディタアドオン ${id} の JavaScript を隔離環境で実行します。` :
@@ -868,10 +868,12 @@ class EditorWindow extends ProjectRunningWindow {
               'New builds from this folder are applied when the editor reloads.') :
             (ja ? 'このフォルダの新しいビルドを自動で反映します。' :
               'New builds from this folder are applied automatically.');
+          const paint = paintClipboard ? (ja ? 'コスチュームエディターの貼り付け位置を元の位置に戻す操作を許可します。' :
+            'Allows resetting the costume editor paste offset.') : '';
           const result = await dialog.showMessageBox(this.window, {
             type: 'question',
             message: ja ? 'エディタアドオンを有効にしますか？' : 'Enable this editor add-on?',
-            detail: `${detail}\n${timing}\n\n${directory}`,
+            detail: [detail, timing, paint, `\n${directory}`].filter(Boolean).join('\n'),
             buttons: ja ? ['キャンセル', '監視を開始'] : ['Cancel', 'Start Watching'],
             defaultId: 0, cancelId: 0, noLink: true
           });

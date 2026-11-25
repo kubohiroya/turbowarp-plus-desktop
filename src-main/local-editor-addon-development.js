@@ -69,6 +69,11 @@ async function readEditorAddon (directory) {
   let scripts;
   let activation = 'live';
   let defaults = [];
+  const permissions = manifest.turbowarpPlusEditor?.addon?.permissions ?? [];
+  if (!Array.isArray(permissions) || permissions.some(permission => !turbo || permission !== 'paint.clipboard-offset')) {
+    return {...row, unavailable: 'LOCAL_ADDON_RUNTIME_UNSUPPORTED'};
+  }
+  const paintClipboard = permissions.includes('paint.clipboard-offset');
   if (turbo) {
     const supportedEntries = entries => Array.isArray(entries) && entries.every(entry =>
       entry && entry.if === undefined && (entry.matches === undefined || (Array.isArray(entry.matches) &&
@@ -108,7 +113,8 @@ async function readEditorAddon (directory) {
     throw error('LOCAL_ADDON_INCOMPLETE');
   }
   const digest = createHash('sha256').update(JSON.stringify([decode(bytes), css, sources])).digest('hex');
-  return {...row, activation, defaults, css, sources, digest};
+  if (paintClipboard && !sources.length) return {...row, unavailable: 'LOCAL_ADDON_RUNTIME_UNSUPPORTED'};
+  return {...row, activation, defaults, css, sources, digest, paintClipboard};
 }
 
 function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory, confirm, intervalMs = 500}) {
@@ -140,7 +146,7 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
   const runtime = message => {
     if (!webContents.isDestroyed()) webContents.send('local-editor-addon-runtime', message);
   };
-  const prepare = (session, build, runtimeId) => new Promise((resolve, reject) => {
+  const prepare = (session, build, runtimeId, startup) => new Promise((resolve, reject) => {
     const finish = success => {
       clearTimeout(timeout);
       waiting.delete(runtimeId);
@@ -150,14 +156,15 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
     const timeout = setTimeout(() => finish(false), 5000);
     waiting.set(runtimeId, finish);
     runtime({type: 'prepare', runtimeId, token: session.token, format: session.format, id: session.id,
-      defaults: build.defaults, sources: build.sources});
+      defaults: build.defaults, sources: build.sources, startup: startup && build.activation === 'startup',
+      paintClipboard: build.paintClipboard});
   });
-  const apply = async (session, build, epoch) => {
+  const apply = async (session, build, epoch, startup = false) => {
     const runtimeId = build.sources.length ? randomUUID() : null;
     let key = null;
     let accepted = false;
     try {
-      if (runtimeId) await prepare(session, build, runtimeId);
+      if (runtimeId) await prepare(session, build, runtimeId, startup);
       if (!live(session, epoch)) return;
       if (build.css) key = await webContents.insertCSS(build.css, {cssOrigin: 'author'});
       if (!live(session, epoch)) return;
@@ -181,7 +188,8 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
   const compatible = async session => {
     const build = await readEditorAddon(session.directory);
     if (build.id !== session.id || build.format !== session.format || build.unavailable ||
-        build.activation !== session.activation || (build.sources.length > 0 && !session.permitsScripts)) throw error('LOCAL_ADDON_CHANGED');
+        build.activation !== session.activation || (build.sources.length > 0 && !session.permitsScripts) ||
+        (build.paintClipboard && !session.permitsPaintClipboard)) throw error('LOCAL_ADDON_CHANGED');
     return build;
   };
   const update = async epoch => {
@@ -247,14 +255,16 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
       if (Array.from(sessions.values()).some(item => item.id === build.id || item.directory.root === directory.root)) {
         throw error('LOCAL_ADDON_DUPLICATE');
       }
-      if (!build.unavailable && !(await confirm(directory.root, build.id, {scripts: build.sources.length > 0, activation: build.activation}))) return;
+      if (!build.unavailable && !(await confirm(directory.root, build.id, {
+        scripts: build.sources.length > 0, activation: build.activation, paintClipboard: build.paintClipboard
+      }))) return;
       if (generation !== epoch) return;
       await serial(async () => {
         if (generation !== epoch) return;
         const {id, format, metadata, unavailable, activation} = build;
         const session = {token: randomUUID(), directory, id, format, metadata, unavailable, activation,
           enabled: !unavailable, applied: false, nextDigest: build.digest ?? null,
-          permitsScripts: Boolean(build.sources?.length)};
+          permitsScripts: Boolean(build.sources?.length), permitsPaintClipboard: build.paintClipboard};
         sessions.set(session.token, session);
         try {
           if (session.enabled && activation === 'live') await apply(session, build, epoch);
@@ -309,12 +319,12 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
           const build = await compatible(session);
           if (!live(session, epoch)) return;
           attemptedDigest = session.nextDigest = build.digest;
-          await apply(session, build, epoch);
+          await apply(session, build, epoch, true);
         } catch (cause) {
           if (!live(session, epoch)) return;
           const {lastGood, nextDigest} = session;
           if (lastGood && lastGood.digest !== attemptedDigest) {
-            try { await apply(session, lastGood, epoch); }
+            try { await apply(session, lastGood, epoch, true); }
             catch { /* The build could not be restored in the replacement renderer. */ }
           }
           if (live(session, epoch)) Object.assign(session, {nextDigest, failure: readFailure(cause)});

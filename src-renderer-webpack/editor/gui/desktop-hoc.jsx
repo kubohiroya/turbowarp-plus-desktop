@@ -21,6 +21,7 @@ import {
 } from 'scratch-gui/src/reducers/tw';
 import {WrappedFileHandle} from './filesystem-api.js';
 import {setStrings} from '../prompt/prompt.js';
+import {startEditorAddonRuntime} from './editor-addon-startup.js';
 import {DesktopSettingsMenuContext} from './desktop-settings-menu-context.js';
 import {connectLocalExtensionDevelopment} from './local-extension-development.js';
 
@@ -131,6 +132,7 @@ const DesktopHOC = function (WrappedComponent) {
       }
     }
     componentDidMount () {
+      const addonsReady = startEditorAddonRuntime(this.props.vm, EditorPreload.localEditorAddons);
       if (EditorPreload.localExtensions) {
         const text = developmentText(this.props.locale);
         this.localExtensions = connectLocalExtensionDevelopment(this.props.vm, EditorPreload.localExtensions,
@@ -154,6 +156,7 @@ const DesktopHOC = function (WrappedComponent) {
 
       this.props.onLoadingStarted();
       (async () => {
+        await addonsReady;
         // Note that 0 is a valid ID and does mean there is a file open
         const id = await EditorPreload.getInitialFile();
         if (id === null) {

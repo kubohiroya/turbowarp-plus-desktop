@@ -4,7 +4,7 @@ import {LocalExtensionDevelopmentDialog} from './local-extension-development-dia
 const errors = locale => locale.startsWith('ja') ? {
   LOCAL_ADDON_RUNTIME_UNSUPPORTED: 'このアドオンの設定は、開発フォルダからの読み込みに対応していません。',
   LOCAL_ADDON_STYLE_UNSUPPORTED: 'この CSS には、外部リソースの参照など、この開発モードで使えない記述があります。',
-  LOCAL_ADDON_RUNTIME_FAILED: 'JavaScript の起動に失敗しました。実行エントリとコマンド登録を確認してください。',
+  LOCAL_ADDON_RUNTIME_FAILED: 'JavaScript の起動に失敗しました。実行エントリとアドオン API の使い方を確認してください。',
   LOCAL_ADDON_DUPLICATE: '同じフォルダ、または同じ ID のアドオンが登録されています。',
   LOCAL_ADDON_REVIEW_FAILED: 'アドオンを読み込めませんでした。マニフェストとビルド出力を確認してください。',
   LOCAL_ADDON_CHANGED: 'アドオンの ID、形式、または実行の許可範囲が変わりました。新しい構成で使うには、フォルダを登録し直してください。',
@@ -13,7 +13,7 @@ const errors = locale => locale.startsWith('ja') ? {
 } : {
   LOCAL_ADDON_RUNTIME_UNSUPPORTED: 'This add-on configuration is unsupported for development folders.',
   LOCAL_ADDON_STYLE_UNSUPPORTED: 'This CSS contains external resources or syntax outside this development profile.',
-  LOCAL_ADDON_RUNTIME_FAILED: 'JavaScript failed to start. Check the entry point and command registration.',
+  LOCAL_ADDON_RUNTIME_FAILED: 'JavaScript failed to start. Check the entry point and use of the add-on API.',
   LOCAL_ADDON_DUPLICATE: 'This folder or add-on ID is already registered.',
   LOCAL_ADDON_REVIEW_FAILED: 'Could not load the add-on. Check its manifest and build output.',
   LOCAL_ADDON_CHANGED: 'The add-on ID, format, or approved capabilities changed. Add the folder again to use the new configuration.',

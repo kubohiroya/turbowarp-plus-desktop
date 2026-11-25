@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const {execFileSync} = require('node:child_process');
 const {EventEmitter} = require('node:events');
 const fs = require('node:fs/promises');
 const {tmpdir} = require('node:os');
@@ -9,25 +10,35 @@ const {installLocalEditorAddonDevelopment} = require('../src-main/local-editor-a
 const origin = 'http://localhost:41015';
 const prefix = '/plus-gui/';
 
-test('Desktop runs both add-on formats and replaces TypeScript commands on rebuild', {timeout: 45_000}, async t => {
+test('Desktop loads editor add-ons with live, startup and scoped Redux integration', {timeout: 45_000}, async t => {
   const editor = process.env.TW_PLUS_EDITOR_SOURCE;
+  const gui = process.env.E2E_GUI_ROOT;
   assert.ok(editor && path.isAbsolute(editor), 'Set TW_PLUS_EDITOR_SOURCE to the pinned Editor checkout');
+  assert.ok(gui && path.isAbsolute(gui), 'Set E2E_GUI_ROOT to the pinned Scratch GUI checkout');
   const {chromium, expect} = require(path.join(editor, 'node_modules/@playwright/test'));
   const {transform} = require(path.join(editor, 'node_modules/esbuild'));
   const renderer = path.resolve(__dirname, '../dist-renderer-webpack/editor/plus-gui');
   const pin = require('../config/plus-renderer.json');
   const info = JSON.parse(await fs.readFile(path.join(renderer, 'build-info.json'), 'utf8'));
   assert.equal(info.editorRevision, pin.editorRevision);
+  assert.equal(execFileSync('git', ['-C', gui, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim(), info.guiRevision);
 
   const worktree = await fs.mkdtemp(path.join(tmpdir(), 'tw-local-addon-'));
   t.after(() => fs.rm(worktree, {recursive: true, force: true}));
   const turbo = path.join(worktree, 'turbo-commands');
   const plus = path.join(worktree, 'plus-commands');
   const startup = path.join(worktree, 'startup-commands');
+  const paint = path.join(worktree, 'disable-paste-offset');
   const startupOutput = path.join(startup, 'entry.js');
-  const buildStartup = label => fs.writeFile(startupOutput, `export const activate = api =>
-    api.registerCommand('startup', ${JSON.stringify(label)}, () => {});`);
-  await Promise.all([fs.mkdir(turbo), fs.mkdir(plus), fs.mkdir(startup)]);
+  const buildStartup = label => fs.writeFile(startupOutput, `
+    let name;
+    export async function beforeProjectLoad() {
+      name = await Promise.resolve(${JSON.stringify(label)});
+    }
+    export function activate(api) {
+      api.registerCommand('startup', name, () => {});
+    }`);
+  await Promise.all([fs.mkdir(turbo), fs.mkdir(plus), fs.mkdir(startup), fs.mkdir(paint)]);
   await Promise.all([
     fs.writeFile(path.join(turbo, 'addon.json'), JSON.stringify({
       name: 'Turbo commands', userscripts: [{url: 'command.js', matches: ['projects']}],
@@ -43,7 +54,12 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
       name: 'startup-commands', displayName: 'Startup commands',
       turbowarpPlusEditor: {addon: {entry: 'entry.js', activation: 'startup'}}
     })),
-    buildStartup('Startup version one')
+    buildStartup('Startup version one'),
+    fs.copyFile(path.join(gui, 'src/addons/addons/disable-paste-offset/userscript.js'), path.join(paint, 'userscript.js')),
+    fs.writeFile(path.join(paint, 'addon.json'), JSON.stringify({
+      name: 'Do not shift pasted items', dynamicDisable: true, userscripts: [{url: 'userscript.js'}],
+      turbowarpPlusEditor: {addon: {permissions: ['paint.clipboard-offset']}}
+    }))
   ]);
   const plusSource = `export function activate(api: {
     registerCommand(id: string, label: string,
@@ -109,14 +125,21 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => { if (errors.length) t.diagnostic(errors.join('\n')); });
+  const startupOrder = [];
+  const startupCandidates = new Set();
   webContents.mainFrame = {url: 'tw-editor://./plus-gui/gui.html'};
   webContents.isDestroyed = () => closing || page.isClosed();
   webContents.send = (name, payload) => {
+    if (name === 'local-editor-addon-runtime') {
+      if (payload.type === 'prepare' && payload.startup) startupCandidates.add(payload.runtimeId);
+      if (payload.type === 'accept' && startupCandidates.delete(payload.runtimeId)) startupOrder.push('addon');
+      if (payload.type === 'discard') startupCandidates.delete(payload.runtimeId);
+    }
     void page.evaluate(([channel, value]) => window.deliverAddonIPC(channel, value), [name, payload])
       .catch(error => { if (!closing) errors.push(error.message); });
   };
   const handlers = new Map();
-  const folders = [turbo, plus, startup];
+  const folders = [turbo, plus, paint, startup];
   const approvals = [];
   installLocalEditorAddonDevelopment({on() {}, handle: (name, handler) => handlers.set(name, handler)}, webContents, {
     chooseDirectory: async () => folders.shift(),
@@ -125,6 +148,7 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
   });
   await page.exposeFunction('invokeAddonIPC', async (name, ...values) => handlers.get(`local-editor-addon-${name}`)(
     {sender: webContents, senderFrame: webContents.mainFrame}, ...values));
+  await page.exposeFunction('requestInitialAddonProject', () => { startupOrder.push('project'); return null; });
   await page.addInitScript(() => {
     if (window !== window.top) return;
     const listeners = new Map();
@@ -132,7 +156,7 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
     window.deliverAddonIPC = (name, value) => listeners.get(name)?.(value);
     window.PromptsPreload = {alert() {}, confirm: () => false};
     window.EditorPreload = {
-      isInitiallyFullscreen: () => false, getInitialFile: async () => null,
+      isInitiallyFullscreen: () => false, getInitialFile: () => window.requestInitialAddonProject(),
       setExportForPackager() {}, setChanged() {}, closedFile() {}, dropPermissions() {}, setIsFullScreen() {},
       getAdvancedCustomizations: async () => ({}), getPreferredMediaDevices: async () => ({}),
       setLocale: () => ({strings: {'prompt.ok': 'OK', 'prompt.cancel': 'Cancel'}}),
@@ -191,7 +215,7 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
 
   await fs.writeFile(output, 'export function activate( {');
   await openFolders();
-  await expect(dialog.getByRole('alert')).toHaveText('JavaScript failed to start. Check the entry point and command registration.');
+  await expect(dialog.getByRole('alert')).toHaveText('JavaScript failed to start. Check the entry point and use of the add-on API.');
   await dialog.getByText('Close', {exact: true}).click();
   await command('Ran build two #1').click();
   await expect(command('Ran build two #2')).toBeVisible();
@@ -202,11 +226,47 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
   await dialog.getByText('Close', {exact: true}).click();
   await expect(command('Ran build two #2')).toHaveCount(0);
   await expect(command('Stopped from TurboWarp add-on')).toBeVisible();
+
+  await openFolders();
+  const turboManifest = path.join(turbo, 'addon.json');
+  const approvedManifest = await fs.readFile(turboManifest, 'utf8');
+  await fs.writeFile(turboManifest, JSON.stringify({...JSON.parse(approvedManifest),
+    turbowarpPlusEditor: {addon: {permissions: ['paint.clipboard-offset']}}}));
+  const turboRow = dialog.locator('li').filter({hasText: 'turbo-commands'});
+  await expect(turboRow.getByRole('alert')).toContainText('approved capabilities changed');
+  await expect(turboRow.getByRole('checkbox')).toBeChecked();
+  await fs.writeFile(turboManifest, approvedManifest);
+  await expect(turboRow.getByRole('alert')).toHaveCount(0);
+  await dialog.getByText('Close', {exact: true}).click();
+
+  await page.evaluate(() => window.ReduxStore.dispatch({type: 'scratch-gui/navigation/ACTIVATE_TAB', activeTabIndex: 1}));
+  const pasteOffset = () => page.evaluate(() => window.ReduxStore.getState().scratchPaint.clipboard.pasteOffset);
+  const incrementOffset = () => page.evaluate(() => {
+    window.ReduxStore.dispatch({type: 'scratch-paint/clipboard/INCREMENT_PASTE_OFFSET'});
+  });
+  await incrementOffset();
+  await expect.poll(pasteOffset).toBe(1);
+  await openFolders();
+  await add.click();
+  const paintCheckbox = dialog.getByRole('checkbox', {name: 'Do not shift pasted items'});
+  await expect(paintCheckbox).toBeChecked();
+  await incrementOffset();
+  await expect.poll(pasteOffset).toBe(0);
+  await paintCheckbox.click();
+  await expect(paintCheckbox).not.toBeChecked();
+  await expect.poll(pasteOffset).toBe(1);
+  await incrementOffset();
+  await expect.poll(pasteOffset).toBe(2);
+  await dialog.getByText('Close', {exact: true}).click();
+  await page.evaluate(() => window.ReduxStore.dispatch({type: 'scratch-gui/navigation/ACTIVATE_TAB', activeTabIndex: 0}));
+
   const reload = async () => {
+    startupOrder.length = 0;
     webContents.emit('did-start-navigation', {isMainFrame: true, isSameDocument: false, url: webContents.mainFrame.url});
     await page.reload();
     await page.waitForFunction(() => Boolean(window.vm?.runtime.getTargetForStage()));
     await expect(command('Stop from TurboWarp add-on')).toBeVisible();
+    await expect.poll(() => startupOrder.at(-1)).toBe('project');
   };
   const reloadNotice = dialog.getByRole('status').filter({hasText: 'reload the editor'});
   await openFolders();
@@ -218,6 +278,7 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
   await expect(command('Startup version one')).toHaveCount(0);
   await reload();
   await expect(command('Startup version one')).toBeVisible();
+  assert.deepEqual(startupOrder, ['addon', 'project']);
 
   await page.evaluate(() => {
     const stage = window.vm.runtime.getTargetForStage();
@@ -241,7 +302,7 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
   await reload();
   await expect(command('Startup version two')).toBeVisible();
 
-  await fs.writeFile(startupOutput, 'export function activate( {');
+  await fs.writeFile(startupOutput, 'export async function beforeProjectLoad() { throw new Error("startup failed"); }');
   await reload();
   await expect(command('Startup version two')).toBeVisible();
   await openFolders();
@@ -272,9 +333,10 @@ test('Desktop runs both add-on formats and replaces TypeScript commands on rebui
   await expect(startupRow).toHaveCount(0);
 
   assert.deepEqual(approvals, [
-    {id: 'turbo-commands', scripts: true, activation: 'live'},
-    {id: 'plus-commands', scripts: true, activation: 'live'},
-    {id: 'startup-commands', scripts: true, activation: 'startup'}
+    {id: 'turbo-commands', scripts: true, activation: 'live', paintClipboard: false},
+    {id: 'plus-commands', scripts: true, activation: 'live', paintClipboard: false},
+    {id: 'disable-paste-offset', scripts: true, activation: 'live', paintClipboard: true},
+    {id: 'startup-commands', scripts: true, activation: 'startup', paintClipboard: false}
   ]);
   assert.equal(probeRequests, 1);
   assert.deepEqual(errors, []);
