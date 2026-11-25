@@ -85,8 +85,15 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     opening = null;
   };
   const isCurrent = (current, generation) => leases.get(current.session) === current && current.generation === generation;
+  const publishArtifacts = (current, waiting) => {
+    if (current.waiting === waiting) return;
+    current.waiting = waiting;
+    webContents.send('local-extension-artifacts', {session: current.session, waiting});
+  };
   const pause = current => {
     current.enabled = false;
+    current.waiting = false;
+    current.missed = false;
     current.generation++;
     clearTimeout(current.timer);
   };
@@ -103,16 +110,23 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
       try {
         const next = await readCompatible(current);
         if (!isCurrent(current, generation)) return;
+        current.missed = false;
+        publishArtifacts(current, false);
         if (next.sha256 !== current.sha256) {
           current.sha256 = next.sha256;
           webContents.send('local-extension-build', {...next, session: current.session});
         }
       } catch (error) {
-        if (isCurrent(current, generation) && ['LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_INCOMPATIBLE'].includes(error.code)) {
+        if (!isCurrent(current, generation)) return;
+        if (['LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_INCOMPATIBLE'].includes(error.code)) {
           pause(current);
           webContents.send('local-extension-stopped', {session: current.session, code: error.code});
+        } else if (current.missed) {
+          // The producer may be publishing files. Report a gap only after two failed reads.
+          publishArtifacts(current, true);
+        } else {
+          current.missed = true;
         }
-        // The producer writes the descriptor last. Ignore missing, unreadable or incomplete generations.
       } finally {
         if (isCurrent(current, generation)) schedule(current);
       }
@@ -141,7 +155,7 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
       if (!(await confirm(selectedDirectory.root, build.id)) || opening !== ticket) return null;
       const session = randomUUID();
       const current = {directory: selectedDirectory, id: build.id, apiSHA256: build.apiSHA256,
-        sha256: build.sha256, session, enabled: true, generation: 0};
+        sha256: build.sha256, session, enabled: true, generation: 0, waiting: false, missed: false};
       leases.set(session, current);
       schedule(current);
       return {...build, session, directory: selectedDirectory.root};

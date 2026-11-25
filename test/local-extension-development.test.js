@@ -88,12 +88,16 @@ test('watching requires the current Editor frame and grants only the active sess
     assert.equal(invoke('authorize', first.session, 'other', first.sha256), false);
     const updates = [];
     webContents.on('local-extension-build', build => updates.push(build));
+    const unavailable = once(webContents, 'local-extension-artifacts');
     await fs.writeFile(files.bundle, 'partial');
-    await delay(80);
+    assert.deepEqual(await unavailable, [{session: first.session, waiting: true}]);
     assert.equal(updates.length, 0);
+    assert.equal(invoke('authorize', first.session, id, first.sha256), true);
+    const available = once(webContents, 'local-extension-artifacts');
     const update = once(webContents, 'local-extension-build');
     await publish('second');
     const [second] = await update;
+    assert.deepEqual(await available, [{session: first.session, waiting: false}]);
     assert.equal(second.session, first.session);
     assert.equal(Object.hasOwn(second, 'directory'), false);
     assert.equal(invoke('authorize', first.session, id, first.sha256), false);

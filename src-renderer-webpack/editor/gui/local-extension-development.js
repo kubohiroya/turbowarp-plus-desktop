@@ -10,12 +10,13 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
 
   const publishSessions = () => {
     if (disposed) return;
-    onSessionsChanged(Array.from(sessions, ([token, {directory, id, sourceHeader, enabled, busy, error}]) =>
-      ({token, directory, id, sourceHeader, enabled, busy, error})));
+    onSessionsChanged(Array.from(sessions, ([token, {directory, id, sourceHeader, enabled, busy, error, sha256, waiting}]) =>
+      ({token, directory, id, sourceHeader, enabled, busy, error, appliedDigest: sha256, waiting})));
   };
 
   const pause = (session, token) => {
     session.enabled = false;
+    session.waiting = false;
     pending.delete(token);
     session.controller.abort();
   };
@@ -60,17 +61,16 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
           installed.capabilities.length || installed.dependencies.length)) throw new Error('LOCAL_EXTENSION_CONFLICT');
       session.sha256 = installed?.sha256 ?? null;
     }
-    if (sessions.get(build.session) !== session || build.sha256 === session.sha256) return;
-    await authoring.applyDevelopmentBuild({id: build.id, sha256: build.sha256,
-      previousSHA256: session.sha256 ?? undefined, bytes: new Uint8Array(build.bytes)},
-    ({id, sha256}) => host.authorize(build.session, id, sha256), {signal: controller.signal});
-    session.sha256 = build.sha256;
-    const header = readHeader(build);
-    if (session.sourceHeader !== header || session.error) {
-      session.sourceHeader = header;
-      session.error = null;
-      publishSessions();
+    if (sessions.get(build.session) !== session) return;
+    if (build.sha256 !== session.sha256) {
+      await authoring.applyDevelopmentBuild({id: build.id, sha256: build.sha256,
+        previousSHA256: session.sha256 ?? undefined, bytes: new Uint8Array(build.bytes)},
+      ({id, sha256}) => host.authorize(build.session, id, sha256), {signal: controller.signal});
+      session.sha256 = build.sha256;
     }
+    session.sourceHeader = readHeader(build);
+    session.error = null;
+    publishSessions();
   };
 
   const enqueue = build => {
@@ -128,6 +128,15 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
   };
 
   const unsubscribeBuild = host.onBuild(enqueue);
+  const unsubscribeArtifacts = host.onArtifacts(({session, waiting}) => {
+    const current = sessions.get(session);
+    if (!current) {
+      opening?.artifacts.set(session, waiting);
+    } else if (current.enabled || current.busy) {
+      current.waiting = waiting;
+      publishSessions();
+    }
+  });
   const unsubscribeStopped = host.onStopped(({session, code}) => {
     const current = sessions.get(session);
     if (!current) {
@@ -150,7 +159,7 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
       const unbindReplacement = authoring.onProjectReplacement(closeOnProjectChange);
       const unbindDisposal = authoring.onDispose(closeOnProjectChange);
       const unsubscribe = () => { unbindReplacement(); unbindDisposal(); };
-      const request = {unsubscribe, events: new Map()};
+      const request = {unsubscribe, events: new Map(), artifacts: new Map()};
       opening = request;
       try {
         const build = await host.start();
@@ -162,7 +171,7 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
         }
         sessions.set(build.session, {authoring, controller: new AbortController(), unsubscribe,
           initialSHA256: build.sha256, directory: build.directory, id: build.id, enabled: true,
-          sourceHeader: readHeader(build)});
+          sourceHeader: readHeader(build), waiting: request.artifacts.get(build.session) ?? false});
         opening = null;
         publishSessions();
         enqueue(newest?.build ?? build);
@@ -205,6 +214,7 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
     dispose () {
       disposed = true;
       unsubscribeBuild();
+      unsubscribeArtifacts();
       unsubscribeStopped();
       stopAll();
     }

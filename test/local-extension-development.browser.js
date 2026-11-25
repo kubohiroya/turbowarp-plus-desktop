@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
-const {execFile} = require('node:child_process');
+const {execFile, spawn} = require('node:child_process');
 const {createHash} = require('node:crypto');
-const {EventEmitter} = require('node:events');
+const {EventEmitter, once} = require('node:events');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const {tmpdir} = require('node:os');
@@ -193,6 +193,7 @@ test('two independently watched extension folders update one Desktop project and
           setEnabled: (...args) => window.invokeDesktopIPC('local-extension-set-enabled', ...args),
           authorize: (...args) => window.invokeDesktopIPC('local-extension-authorize', ...args),
           onBuild: listener => subscribe('local-extension-build', listener),
+          onArtifacts: listener => subscribe('local-extension-artifacts', listener),
           onStopped: listener => subscribe('local-extension-stopped', listener)
         }
       };
@@ -238,8 +239,8 @@ test('two independently watched extension folders update one Desktop project and
     const secondRow = manager.locator('li').filter({hasText: otherInitial.id});
     await expect(firstRow.getByRole('checkbox')).toBeChecked();
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
-    await expect(firstRow.locator('code')).toHaveText(await fs.realpath(folder));
-    await expect(secondRow.locator('code')).toHaveText(await fs.realpath(otherFolder));
+    await expect(firstRow.locator('code:not([title])')).toHaveText(await fs.realpath(folder));
+    await expect(secondRow.locator('code:not([title])')).toHaveText(await fs.realpath(otherFolder));
     assert.deepEqual(consent, [faulty.id, otherInitial.id]);
     await manager.getByText('Close', {exact: true}).click();
 
@@ -260,9 +261,6 @@ test('two independently watched extension folders update one Desktop project and
     await expect(result.locator('code')).toHaveText(['"Hello, Scratch!"', '"Wrong, Scratch!"']);
     await expect(result.getByRole('button', {name: 'Show block'})).toHaveAttribute('data-block-id', assertId);
 
-    const [corrected, otherCorrected] = await Promise.all([build(correctedSource), build(correctedSource, otherFolder)]);
-    assert.notEqual(faulty.sha256, corrected.sha256);
-    assert.equal(faulty.apiSHA256, corrected.apiSHA256);
     const installed = (id = faulty.id) => page.evaluate(extensionId => {
       try {
         return JSON.parse(window.vm.toJSON(undefined, {allowOptimization: false}))
@@ -271,8 +269,32 @@ test('two independently watched extension folders update one Desktop project and
         if (error.code !== 'PROJECT_BUSY') throw error;
       }
     }, id);
+    const watch = spawn(process.execPath, [path.join(folder, 'node_modules/vite/bin/vite.js'), 'build', '--watch'],
+      {cwd: folder, stdio: ['ignore', 'pipe', 'pipe']});
+    const exited = once(watch, 'exit');
+    const stopWatch = () => { if (watch.exitCode === null && watch.signalCode === null) watch.kill(); };
+    t.after(async () => { stopWatch(); await exited.catch(() => {}); });
+    let watchOutput = '';
+    for (const stream of [watch.stdout, watch.stderr]) stream.setEncoding('utf8').on('data', chunk => { watchOutput += chunk; });
+    await expect.poll(() => watchOutput, {timeout: 10_000}).toContain('built in');
+    const previousOutput = watchOutput.length;
+    await fs.writeFile(sourcePath, faultySource + '\nconst = ;\n');
+    await expect.poll(() => watchOutput.slice(previousOutput), {timeout: 10_000}).toMatch(/(?:Transform failed|Build failed)/iu);
+    assert.match(watchOutput.slice(previousOutput), /src[\/]extension\.ts:\d+:\d+/u);
+    assert.equal(await installed(), faulty.sha256);
+    const failedBuildOutput = watchOutput.length;
+    const fixedAt = performance.now();
+    await fs.writeFile(sourcePath, correctedSource);
+    const otherCorrected = await build(correctedSource, otherFolder);
+    await expect.poll(() => watchOutput.slice(failedBuildOutput), {timeout: 10_000}).toContain('built in');
+    const corrected = await readDevelopmentBuild(await openDirectory(folder));
+    stopWatch();
+    await exited;
+    assert.notEqual(faulty.sha256, corrected.sha256);
+    assert.equal(faulty.apiSHA256, corrected.apiSHA256);
     try {
       await expect.poll(installed, {timeout: 10_000}).toBe(corrected.sha256);
+      t.diagnostic(`one local sample from TypeScript write to a detected live update: ${Math.round(performance.now() - fixedAt)} ms`);
       await expect.poll(() => installed(otherInitial.id)).toBe(otherCorrected.sha256);
     } catch (error) {
       t.diagnostic(JSON.stringify(activity));
@@ -292,6 +314,15 @@ test('two independently watched extension folders update one Desktop project and
     await openManager();
     await expect(firstRow.getByRole('checkbox')).toBeChecked();
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
+    const activeBuild = firstRow.locator('code[title]');
+    await expect(activeBuild).toHaveAttribute('title', corrected.sha256);
+    const markerPath = path.join(folder, 'dist', 'extension-development.json');
+    const completedMarker = await fs.readFile(markerPath);
+    await fs.writeFile(markerPath, '{');
+    await expect(firstRow.getByRole('status')).toHaveText('Waiting for a complete and verified build.');
+    await expect(activeBuild).toHaveAttribute('title', corrected.sha256);
+    await fs.writeFile(markerPath, completedMarker);
+    await expect(firstRow.getByRole('status')).toHaveCount(0);
     await firstRow.getByRole('checkbox').uncheck();
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
     const changedAgain = correctedSource.replace('Hello, {name}!', 'Hello again, {name}!');
@@ -307,6 +338,9 @@ test('two independently watched extension folders update one Desktop project and
     assert.equal(incompatible.apiSHA256, corrected.apiSHA256);
     await expect(firstRow.getByRole('alert')).toHaveText('The new build could not be applied. The previous build is still active.');
     assert.equal(await installed(), firstPaused.sha256);
+    await build(changedAgain);
+    await expect(firstRow.getByRole('alert')).toHaveCount(0);
+    await expect(activeBuild).toHaveAttribute('title', firstPaused.sha256);
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
     assert.deepEqual(consent, [faulty.id, otherInitial.id]);
     t.diagnostic('an incompatible registered opcode was rejected, and the corrected build was restored');

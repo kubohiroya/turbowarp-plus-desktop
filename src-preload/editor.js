@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld('EditorPreload', {
     setEnabled: (session, enabled) => ipcRenderer.invoke('local-extension-set-enabled', session, enabled),
     stop: session => ipcRenderer.invoke('local-extension-stop', session),
     onBuild: callback => subscribe('local-extension-build', callback),
+    onArtifacts: callback => subscribe('local-extension-artifacts', callback),
     onStopped: callback => subscribe('local-extension-stopped', callback)
   } : null,
   ...(ipcRenderer.sendSync('local-git-author-enabled') === true && {

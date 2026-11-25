@@ -9,12 +9,14 @@ const messages = locale => locale.startsWith('ja') ? {
   title: '拡張ブロックの開発フォルダ',
   intro: 'チェックしたフォルダの完成ビルドを、この作品に自動で反映します。チェックを外すと、最後に読み込んだ版で動作を続けます。',
   folder: '開発フォルダ', add: '開発フォルダを追加…', remove: '一覧から外す', close: '閉じる',
-  empty: '開発フォルダが登録されていません。'
+  empty: '開発フォルダが登録されていません。',
+  applied: '適用中のビルド', waiting: '整合性を確認できる完成ビルドを待っています。'
 } : {
   title: 'Extension Development Folders',
   intro: 'Checked folders update this project automatically after a completed build. Uncheck a folder to keep running its last loaded build.',
   folder: 'Development folder', add: 'Add Development Folder…', remove: 'Remove from list', close: 'Close',
-  empty: 'No development folders are registered.'
+  empty: 'No development folders are registered.',
+  applied: 'Active build', waiting: 'Waiting for a complete and verified build.'
 };
 
 const addonMessages = locale => locale.startsWith('ja') ? {
@@ -46,6 +48,7 @@ function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove, 
       {session.activation === 'startup' && <span>{text.startup}</span>}
       {session.appliedDigest && <span>{text.applied} <code title={session.appliedDigest}>{session.appliedDigest.slice(0, 12)}</code></span>}
       {session.reloadRequired && <span role="status">{text.pending}</span>}
+      {session.enabled && session.waiting && <span role="status">{text.waiting}</span>}
     </div>}
   >
     {session.error && <p className="twextsec-failed" role="alert">{errorText(session.error)}</p>}
