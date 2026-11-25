@@ -55,8 +55,21 @@ const builtFiles = await build({
     mac: {identity: null, notarize: false},
     win: {signExecutable: false},
     ...(crossBuild && {npmRebuild: false}),
-    afterPack: ({appOutDir, packager}) => {
-      const archive = path.join(packager.getResourcesDir(appOutDir), 'app.asar');
+    afterPack: async ({appOutDir, packager}) => {
+      const resources = packager.getResourcesDir(appOutDir);
+      const archive = path.join(resources, 'app.asar');
+      if (target === 'dmg') {
+        const compiler = path.join(resources, 'standard-extension-compiler');
+        const dependency = name => path.join(compiler, 'node_modules', name);
+        const toolchain = dependency('@kubohiroya/sb3-toolchain');
+        const binding = dependency('@rolldown/binding-darwin-' + arch);
+        const toolchainPackage = await readJson(path.join(toolchain, 'package.json'));
+        assert.equal(toolchainPackage.version, packages['node_modules/@kubohiroya/sb3-toolchain'].version);
+        await fs.access(path.join(compiler, 'worker.mjs'));
+        await fs.access(path.join(toolchain, 'dist/standard-extension-build.js'));
+        const nativeBinding = await readJson(path.join(binding, 'package.json'));
+        await fs.access(path.join(binding, nativeBinding.main));
+      }
       if (crossBuild) {
         assert.ok(!asar.listPackage(archive).some(filename => filename.endsWith('.node')),
           'Cross-packaging requires JavaScript-only runtime dependencies');

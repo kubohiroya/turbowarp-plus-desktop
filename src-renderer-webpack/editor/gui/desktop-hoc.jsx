@@ -84,6 +84,11 @@ const DEFAULT_USERNAME = 'player';
 const developmentText = (locale) => locale.startsWith('ja') ? {
   menu: 'デスクトップメニュー',
   folders: '拡張ブロックの開発フォルダ…',
+  LOCAL_EXTENSION_SOURCE_FAILED: '標準 TypeScript ビルドに失敗しました。テンプレートの設定とソースを確認してください。',
+  LOCAL_EXTENSION_SOURCE_TIMEOUT: 'ソースビルドが制限時間を超えました。',
+  LOCAL_EXTENSION_SOURCE_LIMIT: 'ソースまたはビルド成果物が容量の上限を超えました。',
+  LOCAL_EXTENSION_SOURCE_BUSY: 'ほかのフォルダをビルド中です。完了後にもう一度追加してください。',
+  LOCAL_EXTENSION_SOURCE_UNAVAILABLE: 'この環境では隔離ソースビルドを開始できません。',
   LOCAL_EXTENSION_ALREADY_WATCHING: 'このフォルダ、または同じ拡張ブロック ID のフォルダは監視中です。',
   LOCAL_EXTENSION_BUILD_REQUIRED: '開発フォルダに拡張ブロックの完成ビルドがありません。テンプレートでビルドしてから開いてください。',
   LOCAL_EXTENSION_CONFLICT: '作品の同じ ID の拡張ブロックは別のビルドです。開発フォルダの監視を停止しました。',
@@ -94,6 +99,11 @@ const developmentText = (locale) => locale.startsWith('ja') ? {
   LOCAL_EXTENSION_UNAVAILABLE: 'このEditorでは拡張ブロックの開発フォルダを開けません。'
 } : {
   menu: 'Desktop menu', folders: 'Extension Development Folders…',
+  LOCAL_EXTENSION_SOURCE_FAILED: 'The standard TypeScript build failed. Check the template settings and source.',
+  LOCAL_EXTENSION_SOURCE_TIMEOUT: 'The source build exceeded its time limit.',
+  LOCAL_EXTENSION_SOURCE_LIMIT: 'The source or build outputs exceeded the size limit.',
+  LOCAL_EXTENSION_SOURCE_BUSY: 'Other folders are building. Try adding this folder again when they finish.',
+  LOCAL_EXTENSION_SOURCE_UNAVAILABLE: 'An isolated source build could not start in this environment.',
   LOCAL_EXTENSION_ALREADY_WATCHING: 'This folder, or a folder with the same extension ID, is already being watched.',
   LOCAL_EXTENSION_BUILD_REQUIRED: 'Build the extension with the template before opening the development folder.',
   LOCAL_EXTENSION_CONFLICT: 'The project already uses a different build of this extension. Watching stopped.',
@@ -262,9 +272,11 @@ const DesktopHOC = function (WrappedComponent) {
           sessions: this.state.developmentSessions,
           error: this.state.developmentError,
           errorText: code => development[code],
-          onAdd: () => {
+          sourceBuild: EditorPreload.localExtensions.sourceBuild,
+          onCancelAdd: () => this.localExtensions?.cancelStart(),
+          onAdd: mode => {
             this.setState({developmentError: null});
-            return this.localExtensions?.start();
+            return this.localExtensions?.start(mode);
           },
           onToggle: (token, enabled) => this.localExtensions?.setEnabled(token, enabled),
           onRemove: token => this.localExtensions?.stop(token)

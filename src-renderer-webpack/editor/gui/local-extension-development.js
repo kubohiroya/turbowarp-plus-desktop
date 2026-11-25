@@ -11,8 +11,8 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
 
   const publishSessions = () => {
     if (disposed) return;
-    onSessionsChanged(Array.from(sessions, ([token, {directory, id, sourceHeader, enabled, busy, error, sha256, waiting, diagnostic}]) =>
-      ({token, directory, id, sourceHeader, enabled, busy, error, appliedDigest: sha256, waiting, diagnostic})));
+    onSessionsChanged(Array.from(sessions, ([token, {directory, id, sourceHeader, enabled, busy, error, sha256, waiting, diagnostic, mode, buildError}]) =>
+      ({token, directory, id, sourceHeader, enabled, busy, error, appliedDigest: sha256, waiting, diagnostic, mode, buildError})));
   };
 
   const unsubscribeDiagnostic = host.resolveDiagnostic &&
@@ -34,6 +34,7 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
   const pause = (session, token) => {
     session.enabled = false;
     session.waiting = false;
+    session.buildError = null;
     pending.delete(token);
     session.controller.abort();
   };
@@ -65,7 +66,8 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
   const readHeader = build => decoder.decode(new Uint8Array(build.bytes).subarray(0, 16 * 1024));
   const failureCode = error => [
     'LOCAL_EXTENSION_BUILD_REQUIRED', 'LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_INCOMPATIBLE',
-    'LOCAL_EXTENSION_ALREADY_WATCHING'
+    'LOCAL_EXTENSION_ALREADY_WATCHING', 'LOCAL_EXTENSION_SOURCE_FAILED', 'LOCAL_EXTENSION_SOURCE_TIMEOUT',
+    'LOCAL_EXTENSION_SOURCE_LIMIT', 'LOCAL_EXTENSION_SOURCE_UNAVAILABLE', 'LOCAL_EXTENSION_SOURCE_BUSY'
   ].find(code => error.message.includes(code)) ?? 'LOCAL_EXTENSION_UNAVAILABLE';
 
   const apply = async (session, build) => {
@@ -160,12 +162,13 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
   };
 
   const unsubscribeBuild = host.onBuild(enqueue);
-  const unsubscribeArtifacts = host.onArtifacts(({session, waiting}) => {
+  const unsubscribeArtifacts = host.onArtifacts(({session, waiting, code}) => {
     const current = sessions.get(session);
     if (!current) {
-      opening?.artifacts.set(session, waiting);
+      opening?.artifacts.set(session, {waiting, buildError: code});
     } else if (current.enabled || current.busy) {
       current.waiting = waiting;
+      current.buildError = code;
       publishSessions();
     }
   });
@@ -180,7 +183,7 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
     publishSessions();
   });
   return {
-    async start () {
+    async start (mode) {
       if (disposed || opening) return;
       const authoring = getExtensionAuthoringHost(vm);
       if (typeof authoring?.applyDevelopmentBuild !== 'function') {
@@ -194,8 +197,12 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
       const request = {unsubscribe, events: new Map(), artifacts: new Map()};
       opening = request;
       try {
-        const build = await host.start();
-        if (!build || opening !== request) return;
+        const build = await host.start(mode);
+        if (!build) return;
+        if (opening !== request) {
+          await host.stop(build.session);
+          return;
+        }
         const newest = request.events.get(build.session);
         if (newest?.code) {
           notify(newest.code);
@@ -203,7 +210,7 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
         }
         sessions.set(build.session, {authoring, controller: new AbortController(), unsubscribe,
           initialSHA256: build.sha256, directory: build.directory, id: build.id, enabled: true,
-          sourceHeader: readHeader(build), waiting: request.artifacts.get(build.session) ?? false});
+          sourceHeader: readHeader(build), mode: build.mode, ...request.artifacts.get(build.session)});
         opening = null;
         publishSessions();
         enqueue(newest?.build ?? build);
@@ -216,6 +223,12 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
           unsubscribe();
         }
       }
+    },
+    cancelStart () {
+      if (!opening) return;
+      opening.unsubscribe();
+      opening = null;
+      void host.cancelStart?.().catch(() => {});
     },
     async setEnabled (token, enabled) {
       const session = sessions.get(token);

@@ -235,3 +235,53 @@ test('different extension folders can update and stop independently in the same 
     invoke('stop');
     assert.equal(invoke('authorize', b.session, b.id, next.sha256), false);
   });
+
+test('source consent precedes compilation and cancelling an addition revokes it', {timeout: 5000}, async t => {
+  const {root, publish, files} = await fixture(t);
+  await publish('first');
+  const compiled = new Map(await Promise.all([
+    ['fixture.js', files.bundle], ['extension-manifest.json', files.api], ['extension-development.json', files.marker]
+  ].map(async ([name, filename]) => [name, await fs.readFile(filename)])));
+  const contents = new EventEmitter();
+  contents.mainFrame = {url: 'tw-editor://./plus-gui/gui.html'};
+  contents.send = (...args) => contents.emit(...args);
+  const handlers = new Map();
+  let approval = false;
+  let waitForCancel = false;
+  installLocalExtensionDevelopment({on() {}, handle: (name, handler) => handlers.set(name, handler)}, contents, {
+    chooseDirectory: async () => root,
+    confirm: async (_root, extensionId, mode) => {
+      assert.equal(extensionId, id);
+      assert.equal(mode, 'source');
+      return approval;
+    },
+    sourceBuilder: {
+      read: async () => ({id, digest: 'first'}),
+      build: async (_snapshot, signal) => {
+        assert.ok(approval);
+        if (waitForCancel) {
+          contents.emit('build-started');
+          await once(signal, 'abort');
+          assert.ok(signal.aborted);
+        }
+        return compiled;
+      }
+    }
+  });
+  t.after(() => contents.emit('destroyed'));
+  const event = {sender: contents, senderFrame: contents.mainFrame};
+  const invoke = (name, ...args) => handlers.get('local-extension-' + name)(event, ...args);
+  assert.equal(await invoke('start', 'source'), null);
+  approval = true;
+  waitForCancel = true;
+  const started = once(contents, 'build-started');
+  const cancelled = invoke('start', 'source');
+  await started;
+  invoke('cancel-start');
+  assert.equal(await cancelled, null);
+  waitForCancel = false;
+  const result = await invoke('start', 'source');
+  assert.equal(invoke('authorize', result.session, result.id, result.sha256), true);
+  await invoke('set-enabled', result.session, false);
+  assert.equal(invoke('authorize', result.session, result.id, result.sha256), false);
+});
