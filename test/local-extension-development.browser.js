@@ -304,6 +304,7 @@ test('two independently watched extension folders update one Desktop project and
     assert.deepEqual(consent, [faulty.id, otherInitial.id].map(id => [id, sourceMode ? 'source' : 'artifact']));
     if (expectRuntimeDiagnostic) {
       await expect(firstRow.locator('code[title]')).toHaveAttribute('title', faulty.sha256);
+      await expect(secondRow.locator('code[title]')).toHaveAttribute('title', otherInitial.sha256);
       await page.evaluate(() => { window.vm.greenFlag(); });
       const line = faultySource.split('\n').indexOf(throwLine) + 1;
       const column = throwLine.indexOf('new Error') + 1;
