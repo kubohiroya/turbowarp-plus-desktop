@@ -4,6 +4,8 @@ const {createHash, randomUUID} = require('node:crypto');
 const path = require('node:path');
 
 const descriptorName = 'extension-development.json';
+const digest = /^[0-9a-f]{64}$/u;
+const projectSource = /^src\/(?:[\p{L}\p{M}\p{N}_-][\p{L}\p{M}\p{N}_. -]*\/)*[\p{L}\p{M}\p{N}_-][\p{L}\p{M}\p{N}_. -]*\.(?:[cm]?[jt]s|[jt]sx)$/iu;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino;
 const failure = code => Object.assign(new Error(code), {code});
@@ -44,6 +46,18 @@ const openDirectory = async selected => {
   return {root, identity: await directory(root)};
 };
 
+const assertSourceMap = (bytes, bundleFile) => {
+  const map = json(bytes);
+  if (map?.version !== 3 || (map.file !== undefined && map.file !== bundleFile) ||
+      (map.sourceRoot != null && map.sourceRoot !== '') || map.sourcesContent != null || map.sections !== undefined ||
+      !Array.isArray(map.sources) || map.sources.length > 1024 || map.sources.some(source =>
+        typeof source !== 'string' || (source !== '[external]' && !projectSource.test(source))) ||
+      !Array.isArray(map.names) || map.names.some(name => typeof name !== 'string') ||
+      typeof map.mappings !== 'string' || !/^[a-z\d+/;,]*$/iu.test(map.mappings)) {
+    throw failure('LOCAL_EXTENSION_DESCRIPTOR');
+  }
+};
+
 const readDevelopmentBuild = async ({root, identity}) => {
   if (!sameFile(identity, await directory(root))) throw failure('LOCAL_EXTENSION_BOUNDARY');
   const dist = path.join(root, 'dist');
@@ -51,24 +65,30 @@ const readDevelopmentBuild = async ({root, identity}) => {
   const descriptorPath = path.join(dist, descriptorName);
   const marker = await readFile(descriptorPath, 8192);
   const spec = json(marker);
-  const digest = /^[0-9a-f]{64}$/u;
   if (spec?.formatVersion !== 1 || typeof spec.id !== 'string' || !/^[a-z0-9]{1,64}$/iu.test(spec.id) ||
       typeof spec.bundle?.file !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,119}\.js$/iu.test(spec.bundle.file) ||
       spec.api?.file !== 'extension-manifest.json' || typeof spec.api.sha256 !== 'string' || !digest.test(spec.api.sha256) ||
       typeof spec.bundle.sha256 !== 'string' || !digest.test(spec.bundle.sha256)) throw failure('LOCAL_EXTENSION_DESCRIPTOR');
-  const [bytes, manifest] = await Promise.all([
+  const sourceMap = spec.sourceMap;
+  if (sourceMap !== undefined && (sourceMap?.file !== spec.bundle.file + '.map' ||
+      typeof sourceMap.sha256 !== 'string' || !digest.test(sourceMap.sha256))) throw failure('LOCAL_EXTENSION_DESCRIPTOR');
+  const [bytes, manifest, map] = await Promise.all([
     readFile(path.join(dist, spec.bundle.file), 4 * 1024 * 1024),
-    readFile(path.join(dist, spec.api.file), 128 * 1024)
+    readFile(path.join(dist, spec.api.file), 128 * 1024),
+    sourceMap && readFile(path.join(dist, sourceMap.file), 2 * 1024 * 1024)
   ]);
   if (!sameFile(identity, await directory(root))) throw failure('LOCAL_EXTENSION_BOUNDARY');
   if (!sameFile(distIdentity, await directory(dist))) throw failure('LOCAL_EXTENSION_INCOMPLETE');
   if (!marker.equals(await readFile(descriptorPath, 8192)) || sha256(bytes) !== spec.bundle.sha256 ||
-      sha256(manifest) !== spec.api.sha256) throw failure('LOCAL_EXTENSION_INCOMPLETE');
+      sha256(manifest) !== spec.api.sha256 ||
+      (map && sha256(map) !== sourceMap.sha256)) throw failure('LOCAL_EXTENSION_INCOMPLETE');
+  if (map) assertSourceMap(map, spec.bundle.file);
   const api = json(manifest);
   if (api?.id !== spec.id || api.formatVersion !== 1 || !Array.isArray(api.blocks) || !Array.isArray(api.menus)) {
     throw failure('LOCAL_EXTENSION_DESCRIPTOR');
   }
-  return {id: spec.id, sha256: spec.bundle.sha256, apiSHA256: spec.api.sha256, bytes: new Uint8Array(bytes)};
+  return {id: spec.id, sha256: spec.bundle.sha256, apiSHA256: spec.api.sha256, bytes: new Uint8Array(bytes),
+    ...(sourceMap && {sourceMapSHA256: sourceMap.sha256})};
 };
 
 function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, confirm, intervalMs = 350}) {
@@ -112,8 +132,8 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
         if (!isCurrent(current, generation)) return;
         current.missed = false;
         publishArtifacts(current, false);
-        if (next.sha256 !== current.sha256) {
-          current.sha256 = next.sha256;
+        if (next.sha256 !== current.sha256 || next.sourceMapSHA256 !== current.sourceMapSHA256) {
+          Object.assign(current, {sha256: next.sha256, sourceMapSHA256: next.sourceMapSHA256});
           webContents.send('local-extension-build', {...next, session: current.session});
         }
       } catch (error) {
@@ -155,7 +175,8 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
       if (!(await confirm(selectedDirectory.root, build.id)) || opening !== ticket) return null;
       const session = randomUUID();
       const current = {directory: selectedDirectory, id: build.id, apiSHA256: build.apiSHA256,
-        sha256: build.sha256, session, enabled: true, generation: 0, waiting: false, missed: false};
+        sha256: build.sha256, sourceMapSHA256: build.sourceMapSHA256, session, enabled: true, generation: 0,
+        waiting: false, missed: false};
       leases.set(session, current);
       schedule(current);
       return {...build, session, directory: selectedDirectory.root};
@@ -187,8 +208,7 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
       throw failure('LOCAL_EXTENSION_BUILD_REQUIRED');
     }
     if (!isCurrent(current, generation)) return null;
-    current.enabled = true;
-    current.sha256 = build.sha256;
+    Object.assign(current, {enabled: true, sha256: build.sha256, sourceMapSHA256: build.sourceMapSHA256});
     schedule(current);
     return {...build, session};
   });

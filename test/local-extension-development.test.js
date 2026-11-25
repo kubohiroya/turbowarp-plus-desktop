@@ -20,6 +20,7 @@ async function fixture (t, extensionId = id) {
   const files = {
     bundle: path.join(dist, 'fixture.js'),
     api: path.join(dist, 'extension-manifest.json'),
+    map: path.join(dist, 'fixture.js.map'),
     marker: path.join(dist, 'extension-development.json')
   };
   const publish = async (bundle, manifest = JSON.stringify({...JSON.parse(api), id: extensionId})) => {
@@ -44,6 +45,35 @@ test('a development snapshot rejects partial files and references outside the se
   await fs.unlink(files.bundle);
   await fs.symlink(other, files.bundle, 'file');
   await assert.rejects(readDevelopmentBuild(directory), {code: 'LOCAL_EXTENSION_BOUNDARY'});
+});
+
+test('a development snapshot verifies its optional map without exposing its contents', async t => {
+  const {root, publish, files} = await fixture(t);
+  await publish('first');
+  const directory = await openDirectory(root);
+  const descriptor = JSON.parse(await fs.readFile(files.marker, 'utf8'));
+  assert.equal(Object.hasOwn(await readDevelopmentBuild(directory), 'sourceMapSHA256'), false);
+  const map = {version: 3, file: 'fixture.js', sources: ['src/extension.ts', '[external]'], names: [], mappings: 'AAAA'};
+  const writeMap = async (value, file = 'fixture.js.map') => {
+    const body = JSON.stringify(value);
+    const hash = sha256(body);
+    await fs.writeFile(files.map, body);
+    await fs.writeFile(files.marker, JSON.stringify({...descriptor, sourceMap: {file, sha256: hash}}));
+    return hash;
+  };
+  const hash = await writeMap(map);
+  assert.deepEqual(await readDevelopmentBuild(directory), {
+    id, bytes: new Uint8Array(Buffer.from('first')), sha256: sha256('first'), apiSHA256: sha256(api),
+    sourceMapSHA256: hash
+  });
+  await fs.writeFile(files.map, 'changed');
+  await assert.rejects(readDevelopmentBuild(directory), {code: 'LOCAL_EXTENSION_INCOMPLETE'});
+  await writeMap(map, '../fixture.js.map');
+  await assert.rejects(readDevelopmentBuild(directory), {code: 'LOCAL_EXTENSION_DESCRIPTOR'});
+  await writeMap({...map, sources: ['../../outside.ts']});
+  await assert.rejects(readDevelopmentBuild(directory), {code: 'LOCAL_EXTENSION_DESCRIPTOR'});
+  await writeMap({...map, sourcesContent: ['private source']});
+  await assert.rejects(readDevelopmentBuild(directory), {code: 'LOCAL_EXTENSION_DESCRIPTOR'});
 });
 
 test('retries an atomic artifact replacement after opening its previous inode', async t => {

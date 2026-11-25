@@ -23,6 +23,7 @@ test('two independently watched extension folders update one Desktop project and
     const editor = process.env.TW_PLUS_EDITOR_SOURCE;
     const template = process.env.TW_PLUS_EXTENSION_TEMPLATE_ROOT;
     const testBundle = process.env.TW_PLUS_TEST_EXTENSION_JS;
+    const expectSourceMap = process.env.TW_PLUS_EXPECT_DEVELOPMENT_SOURCE_MAP === '1';
     for (const value of [editor, template, testBundle]) assert.ok(value && path.isAbsolute(value),
       'Set TW_PLUS_EDITOR_SOURCE, TW_PLUS_EXTENSION_TEMPLATE_ROOT and TW_PLUS_TEST_EXTENSION_JS');
     const {chromium, expect} = require(path.join(editor, 'node_modules/@playwright/test'));
@@ -55,10 +56,15 @@ test('two independently watched extension folders update one Desktop project and
     assert.notEqual(faultySource, correctedSource);
     const build = async (source, directory = folder) => {
       await fs.writeFile(path.join(directory, 'src/extension.ts'), source);
-      await exec(process.execPath, [path.join(directory, 'node_modules/vite/bin/vite.js'), 'build'], {cwd: directory});
+      await exec(process.execPath, [path.join(directory, 'node_modules/vite/bin/vite.js'), 'build', '--mode', 'development'],
+        {cwd: directory});
       return readDevelopmentBuild(await openDirectory(directory));
     };
     const [faulty, otherInitial] = await Promise.all([build(faultySource), build(faultySource, otherFolder)]);
+    if (expectSourceMap) {
+      assert.match(faulty.sourceMapSHA256, /^[a-f0-9]{64}$/u);
+      assert.match(otherInitial.sourceMapSHA256, /^[a-f0-9]{64}$/u);
+    }
     const testBytes = await fs.readFile(testBundle);
     assert.equal(createHash('sha256').update(testBytes).digest('hex'), testHash);
     const blocks = {
@@ -269,7 +275,8 @@ test('two independently watched extension folders update one Desktop project and
         if (error.code !== 'PROJECT_BUSY') throw error;
       }
     }, id);
-    const watch = spawn(process.execPath, [path.join(folder, 'node_modules/vite/bin/vite.js'), 'build', '--watch'],
+    const watch = spawn(process.execPath,
+      [path.join(folder, 'node_modules/vite/bin/vite.js'), 'build', '--watch', '--mode', 'development'],
       {cwd: folder, stdio: ['ignore', 'pipe', 'pipe']});
     const exited = once(watch, 'exit');
     const stopWatch = () => { if (watch.exitCode === null && watch.signalCode === null) watch.kill(); };
@@ -292,13 +299,13 @@ test('two independently watched extension folders update one Desktop project and
     await exited;
     assert.notEqual(faulty.sha256, corrected.sha256);
     assert.equal(faulty.apiSHA256, corrected.apiSHA256);
+    if (expectSourceMap) assert.match(corrected.sourceMapSHA256, /^[a-f0-9]{64}$/u);
     try {
       await expect.poll(installed, {timeout: 10_000}).toBe(corrected.sha256);
       t.diagnostic(`one local sample from TypeScript write to a detected live update: ${Math.round(performance.now() - fixedAt)} ms`);
       await expect.poll(() => installed(otherInitial.id)).toBe(otherCorrected.sha256);
     } catch (error) {
-      t.diagnostic(JSON.stringify(activity));
-      t.diagnostic(await page.getByRole('dialog').allTextContents().then(values => values.join('\n')));
+      t.diagnostic(JSON.stringify({activity, alerts, failures, installed: await installed(), expected: corrected.sha256}));
       throw error;
     }
     await expect(review).toHaveCount(0);
