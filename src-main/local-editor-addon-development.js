@@ -5,6 +5,7 @@ const {parse} = require('postcss');
 const {openDirectory, readDevelopmentFile} = require('./local-extension-development');
 
 const cssPath = /^(?:[a-z\d_-][a-z\d_.-]*\/)*[a-z\d_-][a-z\d_.-]*\.css$/iu;
+const scriptPath = /^(?:[a-z\d_-][a-z\d_.-]*\/)*[a-z\d_-][a-z\d_.-]*\.m?js$/iu;
 const addonId = /^(?:@[a-z\d_-]+\/)?[a-z\d][a-z\d_.-]{0,100}$/u;
 const editorPatterns = new Set(['projects', 'https://scratch.mit.edu/projects/*']);
 const allowedAtRules = new Set(['media', 'supports', 'layer', 'container', 'keyframes', 'starting-style']);
@@ -63,38 +64,44 @@ async function readEditorAddon (directory) {
   const format = turbo ? 'turbowarp' : 'plus';
   const row = {id, metadata, format};
   let styles;
+  let scripts;
   if (turbo) {
-    if ((manifest.userscripts !== undefined && (!Array.isArray(manifest.userscripts) || manifest.userscripts.length)) ||
-        !Array.isArray(manifest.userstyles) || manifest.userstyles.some(style =>
-      !style || style.if !== undefined || (style.matches !== undefined && (!Array.isArray(style.matches) ||
-        !style.matches.length || style.matches.some(pattern => !editorPatterns.has(pattern)))))) {
+    const supportedEntries = entries => Array.isArray(entries) && entries.every(entry =>
+      entry && entry.if === undefined && (entry.matches === undefined || (Array.isArray(entry.matches) &&
+        entry.matches.length && entry.matches.every(pattern => editorPatterns.has(pattern)))));
+    if (!supportedEntries(manifest.userstyles ?? []) || !supportedEntries(manifest.userscripts ?? [])) {
       return {...row, unavailable: 'LOCAL_ADDON_RUNTIME_UNSUPPORTED'};
     }
-    styles = manifest.userstyles.map(style => style.url);
+    styles = (manifest.userstyles ?? []).map(style => style.url);
+    scripts = (manifest.userscripts ?? []).map(script => script.url);
   } else {
     const addon = manifest.turbowarpPlusEditor?.addon;
-    if (!addon || addon.entry !== undefined || !Array.isArray(addon.styles) || addon.styles.length !== 1) {
+    if (!addon || (addon.styles !== undefined && (!Array.isArray(addon.styles) || addon.styles.length > 1))) {
       return {...row, unavailable: 'LOCAL_ADDON_RUNTIME_UNSUPPORTED'};
     }
-    styles = addon.styles;
+    styles = addon.styles ?? [];
+    scripts = addon.entry === undefined ? [] : [addon.entry];
   }
-  if (!styles.length || styles.length > 8 || styles.some(name => typeof name !== 'string' || !cssPath.test(name))) {
-    throw error('LOCAL_ADDON_MANIFEST');
-  }
-  const paths = styles.map(name => path.join(root, name));
-  const files = await Promise.all(paths.map(name => readAddonFile(name, 256 * 1024)));
-  const css = files.map(contents => validateStylesheet(decode(contents))).join('\n');
-  const current = await Promise.all([readAddonFile(file, 65536), ...paths.map(name => readAddonFile(name, 256 * 1024))]);
+  if (!styles.length && !scripts.length) return {...row, unavailable: 'LOCAL_ADDON_RUNTIME_UNSUPPORTED'};
+  if (styles.length > 8 || scripts.length > 4 || styles.some(name => typeof name !== 'string' || !cssPath.test(name)) ||
+      scripts.some(name => typeof name !== 'string' || !scriptPath.test(name))) throw error('LOCAL_ADDON_MANIFEST');
+  const inputs = [...styles.map(name => [name, 256 * 1024]), ...scripts.map(name => [name, 512 * 1024])];
+  const readInputs = () => Promise.all(inputs.map(([name, limit]) => readAddonFile(path.join(root, name), limit)));
+  const files = await readInputs();
+  const css = files.slice(0, styles.length).map(contents => validateStylesheet(decode(contents))).join('\n');
+  const sources = files.slice(styles.length).map(decode);
+  const [currentManifest, current] = await Promise.all([readAddonFile(file, 65536), readInputs()]);
   await verifyRoot(directory);
-  if (!bytes.equals(current[0]) || files.some((contents, index) => !contents.equals(current[index + 1]))) {
+  if (!bytes.equals(currentManifest) || files.some((contents, index) => !contents.equals(current[index]))) {
     throw error('LOCAL_ADDON_INCOMPLETE');
   }
-  const digest = createHash('sha256').update(JSON.stringify([decode(bytes), css])).digest('hex');
-  return {...row, css, digest};
+  const digest = createHash('sha256').update(JSON.stringify([decode(bytes), css, sources])).digest('hex');
+  return {...row, css, sources, digest};
 }
 
 function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory, confirm, intervalMs = 500}) {
   const sessions = new Map();
+  const waiting = new Map();
   let opening = false;
   let generation = 0;
   let queue = Promise.resolve();
@@ -110,20 +117,49 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
     return result;
   };
   const live = (session, epoch) => generation === epoch && sessions.get(session.token) === session;
+  const runtime = message => {
+    if (!webContents.isDestroyed()) webContents.send('local-editor-addon-runtime', message);
+  };
+  const prepare = (session, build, runtimeId) => new Promise((resolve, reject) => {
+    const finish = success => {
+      clearTimeout(timeout);
+      waiting.delete(runtimeId);
+      if (success) resolve();
+      else reject(error('LOCAL_ADDON_RUNTIME_FAILED'));
+    };
+    const timeout = setTimeout(() => finish(false), 5000);
+    waiting.set(runtimeId, finish);
+    runtime({type: 'prepare', runtimeId, token: session.token, format: session.format, sources: build.sources});
+  });
   const apply = async (session, build, epoch) => {
-    const key = await webContents.insertCSS(build.css, {cssOrigin: 'author'});
+    const runtimeId = build.sources.length ? randomUUID() : null;
+    let key = null;
+    let accepted = false;
     try {
+      if (runtimeId) await prepare(session, build, runtimeId);
+      if (!live(session, epoch)) return;
+      if (build.css) key = await webContents.insertCSS(build.css, {cssOrigin: 'author'});
       if (!live(session, epoch)) return;
       if (session.key) await webContents.removeInsertedCSS(session.key);
       if (!live(session, epoch)) return;
-      Object.assign(session, {key, digest: build.digest, metadata: build.metadata, enabled: true, failure: null});
+      if (runtimeId) runtime({type: 'accept', runtimeId, token: session.token});
+      else if (session.runtimeId) runtime({type: 'remove', token: session.token});
+      Object.assign(session, {key, runtimeId, digest: build.digest, metadata: build.metadata, enabled: true, failure: null});
+      accepted = true;
     } finally {
-      if (session.key !== key && !webContents.isDestroyed()) await webContents.removeInsertedCSS(key).catch(() => {});
+      if (!accepted && runtimeId) runtime({type: 'discard', runtimeId});
+      if (!accepted && key && !webContents.isDestroyed()) await webContents.removeInsertedCSS(key).catch(() => {});
     }
+  };
+  const unload = async session => {
+    if (session.key) await webContents.removeInsertedCSS(session.key);
+    if (session.runtimeId) runtime({type: 'remove', token: session.token});
+    Object.assign(session, {key: null, runtimeId: null, enabled: false, pending: null, failure: null});
   };
   const compatible = async session => {
     const build = await readEditorAddon(session.directory);
-    if (build.id !== session.id || build.format !== session.format || build.unavailable) throw error('LOCAL_ADDON_CHANGED');
+    if (build.id !== session.id || build.format !== session.format || build.unavailable ||
+        (build.sources.length > 0 && !session.permitsScripts)) throw error('LOCAL_ADDON_CHANGED');
     return build;
   };
   const update = async epoch => {
@@ -164,6 +200,7 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
   });
   ipc.on('local-editor-addon-enabled', event => { event.returnValue = activeFrame(event); });
   handle('list', list);
+  handle('prepared', (runtimeId, success) => waiting.get(runtimeId)?.(success === true));
   handle('start', async () => {
     if (opening) return;
     opening = true;
@@ -176,12 +213,13 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
       if (Array.from(sessions.values()).some(item => item.id === build.id || item.directory.root === directory.root)) {
         throw error('LOCAL_ADDON_DUPLICATE');
       }
-      if (!build.unavailable && !(await confirm(directory.root, build.id))) return;
+      if (!build.unavailable && !(await confirm(directory.root, build.id, {scripts: build.sources.length > 0}))) return;
       if (generation !== epoch) return;
       await serial(async () => {
         if (generation !== epoch) return;
         const {id, format, metadata, unavailable} = build;
-        const session = {token: randomUUID(), directory, id, format, metadata, unavailable, enabled: false};
+        const session = {token: randomUUID(), directory, id, format, metadata, unavailable, enabled: false,
+          permitsScripts: Boolean(build.sources?.length)};
         sessions.set(session.token, session);
         try {
           if (!unavailable) await apply(session, build, epoch);
@@ -203,8 +241,7 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
         if (!live(session, epoch)) return;
         await apply(session, build, epoch);
       } else {
-        await webContents.removeInsertedCSS(session.key);
-        Object.assign(session, {key: null, enabled: false, pending: null, failure: null});
+        await unload(session);
       }
       if (live(session, epoch)) { publish(); schedule(); }
     });
@@ -214,12 +251,14 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
     return serial(async () => {
       const session = sessions.get(token);
       if (!session || generation !== epoch) return;
-      if (session.key) await webContents.removeInsertedCSS(session.key);
+      await unload(session);
       if (live(session, epoch)) { sessions.delete(token); publish(); }
     });
   });
   const reset = () => {
     generation++;
+    for (const finish of waiting.values()) finish(false);
+    runtime({type: 'reset'});
     clearTimeout(timer);
     timer = null;
     const active = Array.from(sessions.values());

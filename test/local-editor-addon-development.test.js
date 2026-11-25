@@ -19,7 +19,7 @@ async function makeFolder (parent, name, format) {
   return {root, file, manifest, css};
 }
 
-test('loads styles for both manifest formats and keeps scripts and external resources outside the style profile', async t => {
+test('loads local JavaScript and CSS for both formats within the selected folder', async t => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-addon-profile-'));
   t.after(() => fs.rm(parent, {recursive: true, force: true}));
   const a = await makeFolder(parent, 'turbo', 'turbowarp');
@@ -28,7 +28,18 @@ test('loads styles for both manifest formats and keeps scripts and external reso
   assert.equal((await read(a)).format, 'turbowarp');
   assert.equal((await read(b)).format, 'plus');
   await fs.writeFile(a.file, JSON.stringify({...a.manifest, userscripts: [{url: 'example.js'}]}));
+  const turboSource = 'export default ({addon}) => addon.tab.registerEditorCommand("run", "Run", () => ({project: "run"}));';
+  await fs.writeFile(path.join(a.root, 'example.js'), turboSource);
+  assert.deepEqual((await read(a)).sources, [turboSource]);
+  await fs.writeFile(a.file, JSON.stringify({...a.manifest, userscripts: [{url: 'example.js', if: {}}]}));
   assert.equal((await read(a)).unavailable, 'LOCAL_ADDON_RUNTIME_UNSUPPORTED');
+  const plusSource = 'export const activate = api => api.registerCommand("stop", "Stop", () => ({project: "stop"}));';
+  await fs.writeFile(path.join(b.root, 'sample.mjs'), plusSource);
+  await fs.writeFile(b.file, JSON.stringify({name: 'plus-addon', turbowarpPlusEditor: {addon: {entry: 'sample.mjs'}}}));
+  const plus = await read(b);
+  assert.equal(plus.css, '');
+  assert.deepEqual(plus.sources, [plusSource]);
+  await fs.writeFile(b.file, JSON.stringify(b.manifest));
   for (const css of ['@import "https://test.invalid/style.css";',
     '.editor { background: var(--network, image-set("https://test.invalid/private" 1x)); }',
     '.editor { background: u\\72l(https://test.invalid); }',
@@ -87,6 +98,11 @@ test('the two editor add-on folders can update, pause and resume independently',
   await fs.writeFile(b.css, '.editor { --plus-addon: second; }');
   await change;
   assert.deepEqual([...styles.values()], ['.editor { --plus-addon: second; }']);
+  await fs.writeFile(a.file, JSON.stringify({...a.manifest, userscripts: [{url: 'example.js'}]}));
+  await fs.writeFile(path.join(a.root, 'example.js'), 'export default () => {};');
+  await assert.rejects(invoke('set-enabled', first.token, true), {code: 'LOCAL_ADDON_CHANGED'});
+  assert.deepEqual(invoke('list').map(item => item.enabled), [false, true]);
+  await fs.writeFile(a.file, JSON.stringify(a.manifest));
   await fs.writeFile(a.css, '.editor { --turbo: newer; }');
   await invoke('set-enabled', first.token, true);
   assert.ok([...styles.values()].some(css => css.includes('--turbo: newer')));

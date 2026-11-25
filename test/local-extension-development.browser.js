@@ -181,7 +181,9 @@ test('two independently watched extension folders update one Desktop project and
           start: () => window.invokeDesktopIPC('local-editor-addon-start'),
           setEnabled: (...args) => window.invokeDesktopIPC('local-editor-addon-set-enabled', ...args),
           remove: token => window.invokeDesktopIPC('local-editor-addon-remove', token),
-          onChange: listener => subscribe('local-editor-addon-change', listener)
+          onChange: listener => subscribe('local-editor-addon-change', listener),
+          onRuntime: listener => subscribe('local-editor-addon-runtime', listener),
+          prepared: (...args) => window.invokeDesktopIPC('local-editor-addon-prepared', ...args)
         },
         localExtensions: {
           start: () => window.invokeDesktopIPC('local-extension-start'),
@@ -310,7 +312,7 @@ test('two independently watched extension folders update one Desktop project and
     await manager.getByText('Close', {exact: true}).click();
     await (await openDesktopMenu()).getByRole('menuitem', {name: 'Editor Add-on Development Folders…'}).click();
     const addons = page.getByRole('dialog', {name: 'Editor Add-on Development Folders'});
-    await expect(addons.getByText('Check a folder to enable its editor add-on. Updates to supported files are applied automatically. Uncheck it to disable the add-on.',
+    await expect(addons.getByText('Check a folder to enable its editor add-on. New builds in the folder are loaded automatically. Uncheck it to disable the add-on.',
       {exact: true})).toBeVisible();
     const addAddon = addons.getByRole('button', {name: 'Add Development Folder…'});
     await addAddon.click();
@@ -327,7 +329,7 @@ test('two independently watched extension folders update one Desktop project and
     await fs.writeFile(path.join(plusFolder, 'main.css'), 'body { --plus-style: second; }');
     await expect.poll(() => property('--plus-style')).toBe('second');
     await fs.writeFile(path.join(plusFolder, 'main.css'), 'body { --plus-style: incomplete');
-    await expect(addons.getByRole('alert')).toHaveText('The CSS output could not be verified. The last applied version is still active.');
+    await expect(addons.getByRole('alert')).toHaveText('The build output could not be verified. The last applied version is still active.');
     assert.equal(await property('--plus-style'), 'second');
     await turboCheckbox.click();
     await expect(turboCheckbox).toBeChecked();

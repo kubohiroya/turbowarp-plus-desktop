@@ -4,6 +4,7 @@ import {renderStageControls as renderEditorStageControls} from '@tw-plus/pinned-
 import {DesktopSettingsMenuContext} from './desktop-settings-menu-context.js';
 import {LocalEditorAddonDevelopmentDialog} from './local-editor-addon-development-dialog.jsx';
 import {LocalExtensionDevelopmentDialog} from './local-extension-development-dialog.jsx';
+import {ensureEditorAddonRuntime} from './local-editor-addon-runtime.js';
 import styles from './desktop-settings-menu.css';
 
 export * from '@tw-plus/pinned-gui-host';
@@ -11,7 +12,10 @@ export * from '@tw-plus/pinned-gui-host';
 // Desktop has its own menu and keeps the same menu-bar layout as the legacy About button.
 export const ProjectInfoMenu = undefined;
 
-function DesktopSettingsMenu () {
+function DesktopSettingsMenu ({vm}) {
+  React.useEffect(() => {
+    ensureEditorAddonRuntime(vm, EditorPreload.localEditorAddons);
+  }, [vm]);
   const menu = React.useContext(DesktopSettingsMenuContext);
   const [open, setOpen] = React.useState(null);
   const [adding, setAdding] = React.useState(false);
@@ -43,5 +47,5 @@ function DesktopSettingsMenu () {
 
 export const renderStageControls = props => <>
   {renderEditorStageControls(props)}
-  {props.menuLocale !== undefined && <DesktopSettingsMenu />}
+  {props.menuLocale !== undefined && <DesktopSettingsMenu vm={props.vm} />}
 </>;

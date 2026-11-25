@@ -857,13 +857,17 @@ class EditorWindow extends ProjectRunningWindow {
           });
           return result.canceled ? null : result.filePaths[0];
         },
-        confirm: async (directory, id) => {
+        confirm: async (directory, id, {scripts}) => {
           const ja = settings.locale?.startsWith('ja');
+          const detail = scripts ?
+            (ja ? `エディタアドオン ${id} の JavaScript を隔離環境で実行します。このフォルダの新しいビルドを自動で読み込みます。` :
+              `JavaScript for ${id} runs in an isolated environment. New builds in this folder are loaded automatically.`) :
+            (ja ? `エディタアドオン ${id} を有効にします。このフォルダの新しいビルドを自動で読み込みます。` :
+              `This enables the editor add-on ${id} and loads new builds from this folder automatically.`);
           const result = await dialog.showMessageBox(this.window, {
             type: 'question',
             message: ja ? 'エディタアドオンを有効にしますか？' : 'Enable this editor add-on?',
-            detail: ja ? `このフォルダのエディタアドオン ${id} を有効にします。対応する成果物が更新されると、自動で反映します。\n\n${directory}` :
-              `This enables the editor add-on ${id} and automatically applies updates to supported files in this folder.\n\n${directory}`,
+            detail: `${detail}\n\n${directory}`,
             buttons: ja ? ['キャンセル', '監視を開始'] : ['Cancel', 'Start Watching'],
             defaultId: 0, cancelId: 0, noLink: true
           });

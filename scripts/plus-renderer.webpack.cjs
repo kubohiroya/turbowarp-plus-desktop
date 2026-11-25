@@ -1,3 +1,4 @@
+const {createHash} = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const {createRequire} = require('node:module');
@@ -6,6 +7,7 @@ const editor = process.env.TW_PLUS_EDITOR_SOURCE;
 const config = require(path.join(editor, 'scripts/desktop/webpack.config.cts'));
 const guiRequire = createRequire(path.join(process.env.E2E_GUI_ROOT, 'package.json'));
 const HtmlWebpackPlugin = guiRequire('html-webpack-plugin');
+const editorRequire = createRequire(path.join(editor, 'package.json'));
 const addons = path.join(process.env.TW_PLUS_DESKTOP_SOURCE, 'src-renderer-webpack/editor/addons');
 const gui = path.join(addons, '../gui');
 const editorHost = path.join(editor, 'site/gui-integration/index.ts');
@@ -13,6 +15,8 @@ const hostProvider = config.plugins.find(plugin => plugin.definitions?.__TW_GUI_
 if (!hostProvider) throw new Error('The pinned Editor GUI host connection has changed');
 hostProvider.definitions.__TW_GUI_HOST__ = path.join(gui, 'plus-gui-host.jsx');
 config.resolve.alias['@tw-plus/pinned-gui-host$'] = editorHost;
+config.resolve.alias['@tw-plus/pinned-stage-controls$'] =
+  editorRequire.resolve('@kubohiroya/turbowarp-plus-editor-workbench/stage-controls');
 config.resolve.alias['./local-extension-authoring.js$'] =
   createRequire(path.join(editor, 'package.json')).resolve('@kubohiroya/turbowarp-extension-loader/scratch-vm');
 config.resolve.alias['@tw-plus/pinned-backpack-window-host$'] =
@@ -47,5 +51,17 @@ config.plugins.push(new HtmlWebpackPlugin({
   chunks: ['desktop-addon-settings'],
   filename: 'addons.html',
   templateContent: template.replace(oldEntry, '')
+}));
+const addonFrame = path.join(gui, 'editor-addon-runtime-frame.js');
+config.plugins.push(new HtmlWebpackPlugin({
+  filename: 'editor-addon-runtime.html',
+  inject: false,
+  minify: false,
+  templateContent: ({compilation}) => {
+    compilation.fileDependencies.add(addonFrame);
+    const source = fs.readFileSync(addonFrame, 'utf8').replace(/\r\n/g, '\n');
+    const hash = createHash('sha256').update(source).digest('base64');
+    return `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-${hash}' blob:; worker-src blob:; connect-src 'none'; base-uri 'none'; form-action 'none'"><script>${source}</script>`;
+  }
 }));
 module.exports = config;

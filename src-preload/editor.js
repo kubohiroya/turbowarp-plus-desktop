@@ -57,7 +57,9 @@ contextBridge.exposeInMainWorld('EditorPreload', {
     start: () => ipcRenderer.invoke('local-editor-addon-start'),
     setEnabled: (token, enabled) => ipcRenderer.invoke('local-editor-addon-set-enabled', token, enabled),
     remove: token => ipcRenderer.invoke('local-editor-addon-remove', token),
-    onChange: listener => subscribe('local-editor-addon-change', listener)
+    onChange: listener => subscribe('local-editor-addon-change', listener),
+    onRuntime: listener => subscribe('local-editor-addon-runtime', listener),
+    prepared: (runtimeId, success) => ipcRenderer.invoke('local-editor-addon-prepared', runtimeId, success)
   } : null,
   localExtensions: ipcRenderer.sendSync('local-extension-development-enabled') === true ? {
     start: () => ipcRenderer.invoke('local-extension-start'),
