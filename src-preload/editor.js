@@ -1,5 +1,11 @@
 const {contextBridge, ipcRenderer} = require('electron');
 
+const subscribe = (name, callback) => {
+  const listener = (_event, value) => callback(value);
+  ipcRenderer.on(name, listener);
+  return () => { ipcRenderer.removeListener(name, listener); };
+};
+
 const localGit = {
   getConnection: () => ipcRenderer.invoke('local-git-connection'),
   getState: () => ipcRenderer.invoke('local-git-state'),
@@ -13,6 +19,13 @@ const localGit = {
 };
 
 contextBridge.exposeInMainWorld('EditorPreload', {
+  localExtensions: ipcRenderer.sendSync('local-extension-development-enabled') === true ? {
+    start: () => ipcRenderer.invoke('local-extension-start'),
+    authorize: (session, id, sha256) => ipcRenderer.invoke('local-extension-authorize', session, id, sha256),
+    stop: () => ipcRenderer.invoke('local-extension-stop'),
+    onBuild: callback => subscribe('local-extension-build', callback),
+    onStopped: callback => subscribe('local-extension-stopped', callback)
+  } : null,
   ...(ipcRenderer.sendSync('local-git-author-enabled') === true && {
     localGitAuthor: () => ipcRenderer.invoke('local-git-author')
   }),
