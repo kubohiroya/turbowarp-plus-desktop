@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {createReadStream, promises as fs} from 'node:fs';
 import path from 'node:path';
 import asar from '@electron/asar';
+import {FuseState, FuseV1Options, getCurrentFuseWire} from '@electron/fuses';
 import {Arch, build, Platform} from 'electron-builder';
 import {verifyEditorWorkbench} from './editor-workbench-pin.mjs';
 
@@ -55,8 +56,30 @@ const builtFiles = await build({
     mac: {identity: null, notarize: false},
     win: {signExecutable: false},
     ...(crossBuild && {npmRebuild: false}),
-    afterPack: ({appOutDir, packager}) => {
-      const archive = path.join(packager.getResourcesDir(appOutDir), 'app.asar');
+    afterPack: async ({appOutDir, packager}) => {
+      const resources = packager.getResourcesDir(appOutDir);
+      const archive = path.join(resources, 'app.asar');
+      if (target === 'dmg') {
+        const compiler = path.join(resources, 'standard-extension-compiler');
+        const dependency = name => path.join(compiler, 'node_modules', name);
+        const toolchain = dependency('@kubohiroya/sb3-toolchain');
+        const binding = dependency('@rolldown/binding-darwin-' + arch);
+        const toolchainPackage = await readJson(path.join(toolchain, 'package.json'));
+        assert.equal(toolchainPackage.version, packages['node_modules/@kubohiroya/sb3-toolchain'].version);
+        await fs.access(path.join(compiler, 'worker.mjs'));
+        await fs.access(path.join(toolchain, 'dist/standard-extension-build.js'));
+        const nativeBinding = await readJson(path.join(binding, 'package.json'));
+        await fs.access(path.join(binding, nativeBinding.main));
+        const executable = path.join(resources, '..', 'MacOS', packager.appInfo.productFilename);
+        const fuses = await getCurrentFuseWire(executable);
+        assert.equal(fuses[FuseV1Options.RunAsNode], FuseState.ENABLE, 'The packaged compiler requires Electron Node mode');
+        execFileSync(process.execPath, ['--test', 'test/local-extension-source-build.test.js'], {
+          cwd: desktop,
+          env: {...process.env, TW_PLUS_SOURCE_BUILD_ELECTRON: executable, TW_PLUS_SOURCE_BUILD_RESOURCES: resources},
+          stdio: 'inherit',
+          timeout: 60_000
+        });
+      }
       if (crossBuild) {
         assert.ok(!asar.listPackage(archive).some(filename => filename.endsWith('.node')),
           'Cross-packaging requires JavaScript-only runtime dependencies');

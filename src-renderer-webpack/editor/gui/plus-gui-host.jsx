@@ -19,11 +19,11 @@ function DesktopSettingsMenu () {
   const [adding, setAdding] = React.useState(false);
   if (!menu) return null;
 
-  const add = async () => {
+  const add = async mode => {
     if (adding) return;
     setAdding(true);
     try {
-      await menu.development.onAdd();
+      await menu.development.onAdd(mode);
     } finally {
       setAdding(false);
     }

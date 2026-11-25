@@ -21,7 +21,7 @@ Windows 用 NSIS は Ubuntu でクロスビルドする。Wine は NSIS のア�
 - Desktop の `LICENSE`、family package のライセンスと索引、ソースと固定版を示す `source-info.json`
 - 公式素材と Packager の取得元・ハッシュを記録した `library-files.json` と `packager.json`
 
-CI で行うのは生成と内容の検査まで。開発用 artifact では配布用証明書、macOS 公証、GitHub Release、更新通知を使わない。製品版の同梱カタログとそのライセンスは #6、署名と対応環境での受け入れは #9 で管理する。
+macOS の CI は、パッケージに同梱した Electron とコンパイラーで標準プロファイルを実際にビルドし、隔離・制限・取消をヘッドレスで検証する。開発用 artifact では配布用証明書、macOS 公証、GitHub Release、更新通知を使わない。製品版の同梱カタログとそのライセンスは #6、署名と対応環境での受け入れは #9 で管理する。
 
 ## Desktop のアイコン
 
@@ -61,3 +61,11 @@ xvfb-run -a node scripts/package-development.mjs nsis x64 ../editor/site/source.
 ```
 
 成果物は `dist/development-artifact/` に出る。切り戻す場合は workflow とビルド設定の変更を revert し、対象の開発用 artifact を配布対象から外す。
+
+### 拡張ブロックの標準ソースビルド
+
+macOS の通常配布版では「⚙️ → 拡張ブロックの開発フォルダ…」で、標準 TypeScript のソースを自動ビルドするフォルダを追加できる。フォルダごとに最初の確認でビルドと自動更新を許可し、チェックを外すとビルドを取り消して最後の適用版を維持する。Electron 同梱の Node.js と、固定した公開版 Toolchain のビルド機能を使う。作品に読み込む拡張ブロックもサンドボックスで実行する。
+
+入力は標準プロファイルのファイルと src 配下に限定し、128 ファイル、1 MiB/ファイル、合計 4 MiB まで。子プロセスは macOS の隔離機構でファイルアクセス、通信、子プロセス起動を制限する。ビルドは 15 秒で打ち切る。成果物はメモリ上で検証し、フォルダには書き込まない。その他の配布版では既存の完成ビルドの監視を利用できる。
+
+切り戻しは Desktop を TW_PLUS_DESKTOP_EXTENSION_SOURCE_BUILD=0 で再起動する。完成ビルドの監視は利用できる。

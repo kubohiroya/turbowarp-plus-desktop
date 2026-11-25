@@ -9,12 +9,16 @@ const messages = locale => locale.startsWith('ja') ? {
   title: '拡張ブロックの開発フォルダ',
   intro: 'チェックしたフォルダの完成ビルドを、この作品に自動で反映します。チェックを外すと、最後に読み込んだ版で動作を続けます。',
   folder: '開発フォルダ', add: '開発フォルダを追加…', remove: '一覧から外す', close: '閉じる',
+  addSource: 'TypeScript ソースを自動ビルドするフォルダを追加…',
+  sourceMode: 'Desktop でソースを自動ビルド', cancelAdd: '追加をキャンセル',
   empty: '開発フォルダが登録されていません。',
   applied: '適用中のビルド', runtimeError: '拡張ブロックの実行エラー', waiting: '整合性を確認できる完成ビルドを待っています。'
 } : {
   title: 'Extension Development Folders',
   intro: 'Checked folders update this project automatically after a completed build. Uncheck a folder to keep running its last loaded build.',
   folder: 'Development folder', add: 'Add Development Folder…', remove: 'Remove from list', close: 'Close',
+  addSource: 'Add Folder and Build TypeScript Automatically…',
+  sourceMode: 'Desktop builds source automatically', cancelAdd: 'Cancel Adding Folder',
   empty: 'No development folders are registered.',
   applied: 'Active build', runtimeError: 'Extension block runtime error', waiting: 'Waiting for a complete and verified build.'
 };
@@ -43,6 +47,7 @@ function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove, 
     previewCache={null}
     pick={{checked: session.enabled, disabled: session.busy || Boolean(session.unavailable) || session.removing, onToggle: () => onToggle(session.token, !session.enabled)}}
     details={<div className={styles.developmentPath}>
+      {session.mode === 'source' && <span>{text.sourceMode}</span>}
       {session.format && <span>{text.formats[session.format]}</span>}
       <strong>{text.folder}</strong>
       <code>{session.directory}</code>
@@ -52,6 +57,7 @@ function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove, 
       {session.enabled && session.waiting && <span role="status">{text.waiting}</span>}
     </div>}
   >
+    {session.buildError && <p className="twextsec-failed" role="status">{errorText(session.buildError)}</p>}
     {session.error && <p className="twextsec-failed" role="alert">{errorText(session.error)}</p>}
     {diagnostic && <p className="twextsec-failed" role="status">
       {text.runtimeError} <code>{`${diagnostic.file}:${diagnostic.line}:${diagnostic.column}`}</code>
@@ -63,7 +69,7 @@ function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove, 
   </ExtensionRow>;
 }
 
-export function LocalExtensionDevelopmentDialog ({locale, sessions, error, errorText, adding, onClose, onAdd, onToggle, onRemove, kind, renderSettings}) {
+export function LocalExtensionDevelopmentDialog ({locale, sessions, error, errorText, adding, onClose, onAdd, onCancelAdd, sourceBuild, onToggle, onRemove, kind, renderSettings}) {
   const text = {...messages(locale), ...(kind === 'addon' && addonMessages(locale))};
   return <Modal contentLabel={text.title} className={reviewStyles.frame} onRequestClose={onClose}>
     <div className={`${reviewStyles.body} ${styles.developmentBody}`}>
@@ -76,7 +82,9 @@ export function LocalExtensionDevelopmentDialog ({locale, sessions, error, error
           </ul>}
         </div>
         <div className={`twextsec-actions ${styles.developmentActions}`}>
-          <button type="button" onClick={onAdd} disabled={adding}>{text.add}</button>
+          <button type="button" onClick={() => onAdd('artifact')} disabled={adding}>{text.add}</button>
+          {sourceBuild && <button type="button" onClick={() => onAdd('source')} disabled={adding}>{text.addSource}</button>}
+          {adding && onCancelAdd && <button type="button" onClick={onCancelAdd}>{text.cancelAdd}</button>}
           <button type="button" onClick={onClose} disabled={adding}>{text.close}</button>
         </div>
       </div>

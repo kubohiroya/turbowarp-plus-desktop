@@ -19,7 +19,7 @@ const directory = async name => {
   return stat;
 };
 
-const readFile = async (name, limit) => {
+const readFile = async (name, limit, limitCode = 'LOCAL_EXTENSION_INCOMPLETE') => {
   const stat = await fs.lstat(name);
   if (!stat.isFile() || await fs.realpath(name) !== name) throw failure('LOCAL_EXTENSION_BOUNDARY');
   const handle = await fs.open(name, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
@@ -28,7 +28,8 @@ const readFile = async (name, limit) => {
     if (!before.isFile() || before.nlink > 1) throw failure('LOCAL_EXTENSION_BOUNDARY');
     // An atomic rename can unlink the open inode while a new build is being published.
     if (before.nlink === 0 || !sameFile(stat, before)) throw failure('LOCAL_EXTENSION_INCOMPLETE');
-    if (before.size < 1 || before.size > limit) throw failure('LOCAL_EXTENSION_INCOMPLETE');
+    if (before.size > limit) throw failure(limitCode);
+    if (before.size < 1 && limitCode === 'LOCAL_EXTENSION_INCOMPLETE') throw failure(limitCode);
     const bytes = Buffer.alloc(before.size);
     const {bytesRead} = await handle.read(bytes, 0, bytes.length, 0);
     const after = await handle.stat();
@@ -61,12 +62,8 @@ const assertSourceMap = (bytes, bundleFile) => {
   return map;
 };
 
-const readSnapshot = async ({root, identity}) => {
-  if (!sameFile(identity, await directory(root))) throw failure('LOCAL_EXTENSION_BOUNDARY');
-  const dist = path.join(root, 'dist');
-  const distIdentity = await directory(dist);
-  const descriptorPath = path.join(dist, descriptorName);
-  const marker = await readFile(descriptorPath, 8192);
+const readCompletedBuild = async read => {
+  const marker = await read(descriptorName, 8192);
   const spec = json(marker);
   if (spec?.formatVersion !== 1 || typeof spec.id !== 'string' || !/^[a-z0-9]{1,64}$/iu.test(spec.id) ||
       typeof spec.bundle?.file !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,119}\.js$/iu.test(spec.bundle.file) ||
@@ -76,13 +73,11 @@ const readSnapshot = async ({root, identity}) => {
   if (sourceMap !== undefined && (sourceMap?.file !== spec.bundle.file + '.map' ||
       typeof sourceMap.sha256 !== 'string' || !digest.test(sourceMap.sha256))) throw failure('LOCAL_EXTENSION_DESCRIPTOR');
   const [bytes, manifest, map] = await Promise.all([
-    readFile(path.join(dist, spec.bundle.file), 4 * 1024 * 1024),
-    readFile(path.join(dist, spec.api.file), 128 * 1024),
-    sourceMap && readFile(path.join(dist, sourceMap.file), 2 * 1024 * 1024)
+    read(spec.bundle.file, 4 * 1024 * 1024),
+    read(spec.api.file, 128 * 1024),
+    sourceMap && read(sourceMap.file, 2 * 1024 * 1024)
   ]);
-  if (!sameFile(identity, await directory(root))) throw failure('LOCAL_EXTENSION_BOUNDARY');
-  if (!sameFile(distIdentity, await directory(dist))) throw failure('LOCAL_EXTENSION_INCOMPLETE');
-  if (!marker.equals(await readFile(descriptorPath, 8192)) || sha256(bytes) !== spec.bundle.sha256 ||
+  if (!marker.equals(await read(descriptorName, 8192)) || sha256(bytes) !== spec.bundle.sha256 ||
       sha256(manifest) !== spec.api.sha256 ||
       (map && sha256(map) !== sourceMap.sha256)) throw failure('LOCAL_EXTENSION_INCOMPLETE');
   const sourceMapPayload = map && assertSourceMap(map, spec.bundle.file);
@@ -95,28 +90,57 @@ const readSnapshot = async ({root, identity}) => {
   return {build, diagnostic: {sha256: build.sha256, sourceMapSHA256: build.sourceMapSHA256, sourceMapPayload}};
 };
 
+const readSnapshot = async ({root, identity}) => {
+  if (!sameFile(identity, await directory(root))) throw failure('LOCAL_EXTENSION_BOUNDARY');
+  const dist = path.join(root, 'dist');
+  const distIdentity = await directory(dist);
+  const snapshot = await readCompletedBuild((name, limit) => readFile(path.join(dist, name), limit));
+  if (!sameFile(identity, await directory(root))) throw failure('LOCAL_EXTENSION_BOUNDARY');
+  if (!sameFile(distIdentity, await directory(dist))) throw failure('LOCAL_EXTENSION_INCOMPLETE');
+  return snapshot;
+};
+
+const buildFromSource = async (builder, source, signal) => {
+  const files = await builder.build(source, signal);
+  return readCompletedBuild((name, limit) => {
+    const bytes = files.get(name);
+    if (!bytes || bytes.length > limit) throw failure('LOCAL_EXTENSION_SOURCE_LIMIT');
+    return bytes;
+  });
+};
+
+const sourceErrors = new Set([
+  'LOCAL_EXTENSION_SOURCE_UNAVAILABLE', 'LOCAL_EXTENSION_SOURCE_LIMIT', 'LOCAL_EXTENSION_SOURCE_TIMEOUT',
+  'LOCAL_EXTENSION_SOURCE_FAILED', 'LOCAL_EXTENSION_SOURCE_CANCELLED', 'LOCAL_EXTENSION_SOURCE_BUSY'
+]);
+const sourceError = error => sourceErrors.has(error.code) ? error.code : 'LOCAL_EXTENSION_SOURCE_FAILED';
+
 const readDevelopmentBuild = async target => (await readSnapshot(target)).build;
 const matchBuild = (snapshot, sha256, sourceMapSHA256) =>
   snapshot?.sha256 === sha256 && snapshot.sourceMapSHA256 === sourceMapSHA256;
 
-function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, confirm, intervalMs = 350}) {
+function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, confirm, sourceBuilder, intervalMs = 350}) {
   const leases = new Map();
   let opening = null;
   const trusted = event => event.sender === webContents && event.senderFrame === webContents.mainFrame &&
     event.senderFrame?.url?.split(/[?#]/u, 1)[0] === 'tw-editor://./plus-gui/gui.html';
   const stop = session => {
-    clearTimeout(leases.get(session)?.timer);
+    const current = leases.get(session);
+    clearTimeout(current?.timer);
+    current?.controller?.abort();
     leases.delete(session);
   };
   const close = () => {
     for (const session of leases.keys()) stop(session);
+    opening?.controller.abort();
     opening = null;
   };
   const isCurrent = (current, generation) => leases.get(current.session) === current && current.generation === generation;
-  const publishArtifacts = (current, waiting) => {
-    if (current.waiting === waiting) return;
+  const publishArtifacts = (current, waiting, code) => {
+    if (current.waiting === waiting && current.buildError === code) return;
     current.waiting = waiting;
-    webContents.send('local-extension-artifacts', {session: current.session, waiting});
+    current.buildError = code;
+    webContents.send('local-extension-artifacts', {session: current.session, waiting, ...(code && {code})});
   };
   const pause = current => {
     current.enabled = false;
@@ -124,10 +148,35 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     current.missed = false;
     current.generation++;
     clearTimeout(current.timer);
+    current.controller?.abort();
+  };
+  const checkCompatible = (snapshot, current) => {
+    if (snapshot.build.id !== current.id || snapshot.build.apiSHA256 !== current.apiSHA256) {
+      throw failure('LOCAL_EXTENSION_INCOMPATIBLE');
+    }
+    return snapshot;
   };
   const readCompatible = async current => {
-    const next = await readSnapshot(current.directory);
-    if (next.build.id !== current.id || next.build.apiSHA256 !== current.apiSHA256) throw failure('LOCAL_EXTENSION_INCOMPATIBLE');
+    if (current.mode !== 'source') return checkCompatible(await readSnapshot(current.directory), current);
+    const {signal} = current.controller;
+    const source = await sourceBuilder.read(current.directory, signal, readFile);
+    if (source.id !== current.id) throw failure('LOCAL_EXTENSION_INCOMPATIBLE');
+    if (source.digest === current.failedSource?.digest) throw failure(current.failedSource.code);
+    if (source.digest === current.sourceDigest) return current.snapshot;
+    let next;
+    try {
+      next = await buildFromSource(sourceBuilder, source, signal);
+    } catch (error) {
+      if (!signal.aborted && error.code !== 'LOCAL_EXTENSION_SOURCE_BUSY') {
+        current.failedSource = {digest: source.digest, code: sourceError(error)};
+      }
+      throw error;
+    }
+    signal.throwIfAborted();
+    checkCompatible(next, current);
+    current.sourceDigest = source.digest;
+    current.snapshot = next;
+    current.failedSource = undefined;
     return next;
   };
   const schedule = current => {
@@ -147,9 +196,12 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
         }
       } catch (error) {
         if (!isCurrent(current, generation)) return;
+        if (error.code === 'LOCAL_EXTENSION_SOURCE_BUSY') return;
         if (['LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_INCOMPATIBLE'].includes(error.code)) {
           pause(current);
           webContents.send('local-extension-stopped', {session: current.session, code: error.code});
+        } else if (current.mode === 'source') {
+          publishArtifacts(current, false, sourceError(error));
         } else if (current.missed) {
           // The producer may be publishing files. Report a gap only after two failed reads.
           publishArtifacts(current, true);
@@ -167,32 +219,46 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     if (!trusted(event)) throw failure('LOCAL_EXTENSION_UNAVAILABLE');
     return operation(...args);
   });
-  handle('start', async () => {
+  ipc.on('local-extension-source-build-enabled', event => { event.returnValue = trusted(event) && Boolean(sourceBuilder); });
+  handle('cancel-start', () => {
+    opening?.controller.abort();
+    opening = null;
+  });
+  handle('start', async (mode = 'artifact') => {
+    if (mode !== 'artifact' && (mode !== 'source' || !sourceBuilder)) throw failure('LOCAL_EXTENSION_SOURCE_UNAVAILABLE');
     if (opening) throw failure('LOCAL_EXTENSION_BUSY');
-    const ticket = {};
+    const ticket = {controller: new AbortController()};
+    const {signal} = ticket.controller;
     opening = ticket;
     try {
       const selected = await chooseDirectory();
       if (!selected || opening !== ticket) return null;
       const selectedDirectory = await openDirectory(selected);
-      const snapshot = await readSnapshot(selectedDirectory);
-      const {build, diagnostic} = snapshot;
+      const source = mode === 'source' ? await sourceBuilder.read(selectedDirectory, signal, readFile) : null;
+      let snapshot = source ? null : await readSnapshot(selectedDirectory);
+      const id = source?.id ?? snapshot.build.id;
       if (opening !== ticket) return null;
-      if (Array.from(leases.values()).some(current => current.id === build.id ||
+      if (Array.from(leases.values()).some(current => current.id === id ||
           sameFile(current.directory.identity, selectedDirectory.identity))) {
         throw failure('LOCAL_EXTENSION_ALREADY_WATCHING');
       }
-      if (!(await confirm(selectedDirectory.root, build.id)) || opening !== ticket) return null;
+      if (!(await confirm(selectedDirectory.root, id, mode)) || opening !== ticket) return null;
+      if (source) snapshot = await buildFromSource(sourceBuilder, source, signal);
+      if (opening !== ticket) return null;
+      const {build, diagnostic} = snapshot;
+      if (build.id !== id) throw failure('LOCAL_EXTENSION_INCOMPATIBLE');
       const session = randomUUID();
-      const current = {directory: selectedDirectory, id: build.id, apiSHA256: build.apiSHA256,
+      const current = {directory: selectedDirectory, id, mode, controller: ticket.controller,
+        sourceDigest: source?.digest, snapshot: source ? snapshot : null, apiSHA256: build.apiSHA256,
         sha256: build.sha256, sourceMapSHA256: build.sourceMapSHA256, session, enabled: true, generation: 0,
         waiting: false, missed: false, diagnostic, staged: null, applied: null};
       leases.set(session, current);
       schedule(current);
-      return {...build, session, directory: selectedDirectory.root};
+      return {...build, session, mode, directory: selectedDirectory.root};
     } catch (error) {
-      if (['LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_ALREADY_WATCHING'].includes(error.code)) throw error;
-      throw failure('LOCAL_EXTENSION_BUILD_REQUIRED');
+      if (opening !== ticket) return null;
+      if (['LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_ALREADY_WATCHING', 'LOCAL_EXTENSION_INCOMPATIBLE'].includes(error.code)) throw error;
+      throw failure(mode === 'source' ? sourceError(error) : 'LOCAL_EXTENSION_BUILD_REQUIRED');
     } finally {
       if (opening === ticket) opening = null;
     }
@@ -239,16 +305,20 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     }
     if (current.enabled) throw failure('LOCAL_EXTENSION_BUSY');
     const generation = ++current.generation;
+    current.controller?.abort();
+    current.controller = new AbortController();
+    current.failedSource = undefined;
     let snapshot;
     try {
       snapshot = await readCompatible(current);
     } catch (error) {
+      if (!isCurrent(current, generation)) return null;
       if (['LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_INCOMPATIBLE'].includes(error.code)) throw error;
-      throw failure('LOCAL_EXTENSION_BUILD_REQUIRED');
+      throw failure(current.mode === 'source' ? sourceError(error) : 'LOCAL_EXTENSION_BUILD_REQUIRED');
     }
     if (!isCurrent(current, generation)) return null;
     const {build, diagnostic} = snapshot;
-    Object.assign(current, {enabled: true, sha256: build.sha256, sourceMapSHA256: build.sourceMapSHA256, diagnostic});
+    Object.assign(current, {enabled: true, buildError: undefined, sha256: build.sha256, sourceMapSHA256: build.sourceMapSHA256, diagnostic});
     schedule(current);
     return {...build, session};
   });

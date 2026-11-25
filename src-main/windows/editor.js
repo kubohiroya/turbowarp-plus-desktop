@@ -32,6 +32,7 @@ const {installMergePlanMcp} = require('../merge-plan-mcp-ipc');
 const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
 const {installLocalExtensionDevelopment} = require('../local-extension-development');
+const {createStandardExtensionBuilder} = require('../standard-extension-source-build');
 const isTestRunWindow = details => details.frameName === 'tw-plus-test-run' && details.url === 'about:blank' && !details.postBody;
 const {installRepositoryCreation, loadCreationContract} = require('../local-git/repository-creation-ipc');
 const {createRepositoryCreationJournal} = require('../local-git/repository-creation-journal');
@@ -41,9 +42,10 @@ const {createGitCredentialHelper} = require('../local-git/git-credential-helper'
 const {PERSONAL_TOKEN} = require('../local-git/service');
 const {installEditorPopouts, isReservedPopout} = require('./editor-popouts');
 const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml,
-  gitPersonalAccessToken, gitCredentialHelper, aiAgents, mergePlanMcp} =
+  gitPersonalAccessToken, gitCredentialHelper, aiAgents, mergePlanMcp, localExtensionSourceBuild} =
   require('../../config/feature-flags');
 
+const sourceBuilder = localExtensionSourceBuild && createStandardExtensionBuilder({isPackaged: app.isPackaged});
 const rendererDirectory = plusRenderer ? 'plus-gui' : 'gui';
 const gitEnabled = plusRenderer && !projectProcess.worker;
 const gitClientIdOverride = process.env.TW_PLUS_DESKTOP_GIT_CLIENT_ID;
@@ -826,6 +828,7 @@ class EditorWindow extends ProjectRunningWindow {
         window.webContents.on('will-navigate', event => event.preventDefault());
       });
       installLocalExtensionDevelopment(this.ipc, this.window.webContents, {
+        sourceBuilder,
         chooseDirectory: async () => {
           const ja = settings.locale?.startsWith('ja');
           const result = await dialog.showOpenDialog(this.window, {
@@ -834,12 +837,15 @@ class EditorWindow extends ProjectRunningWindow {
           });
           return result.canceled ? null : result.filePaths[0];
         },
-        confirm: async (directory, id) => {
+        confirm: async (directory, id, mode) => {
           const ja = settings.locale?.startsWith('ja');
           const result = await dialog.showMessageBox(this.window, {
             type: 'question',
             message: ja ? '開発中の拡張ブロックを自動で更新しますか？' : 'Reload development builds automatically?',
-            detail: ja ? `拡張ブロック ${id} をサンドボックスで実行します。次のフォルダで完成した互換ビルドが、この作品に自動で反映されます。\n\n${directory}` :
+            detail: mode === 'source' ? (ja ?
+              'Desktop がこのフォルダの標準 TypeScript プロジェクトを隔離環境でビルドし、拡張ブロック ' + id + ' を作品のサンドボックスに読み込みます。ソースを保存すると自動で反映されます。\n\n' + directory :
+              'Desktop builds this folder’s standard TypeScript project in isolation and loads extension ' + id + ' into the project sandbox. Saving source changes updates it automatically.\n\n' + directory) :
+              ja ? `拡張ブロック ${id} をサンドボックスで実行します。次のフォルダで完成した互換ビルドが、この作品に自動で反映されます。\n\n${directory}` :
               `Extension ${id} runs in the sandbox. Compatible builds completed in this folder will update this project automatically.\n\n${directory}`,
             buttons: ja ? ['キャンセル', '監視を開始'] : ['Cancel', 'Start Watching'],
             defaultId: 0, cancelId: 0, noLink: true

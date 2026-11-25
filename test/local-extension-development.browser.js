@@ -17,19 +17,25 @@ const assertId = 'check-development-greeting';
 const testHash = '7f6541ce906594cde7d02498c65e8a800f0c194a924d288f9de4d702e738d868';
 
 test('two independently watched extension folders update one Desktop project and its Scratch test',
-  {timeout: 60_000}, async t => {
+  {timeout: 90_000}, async t => {
     const editor = process.env.TW_PLUS_EDITOR_SOURCE;
     const template = process.env.TW_PLUS_EXTENSION_TEMPLATE_ROOT;
     const testBundle = process.env.TW_PLUS_TEST_EXTENSION_JS;
     const packagedApp = process.env.TW_PLUS_DESKTOP_APP_SOURCE;
+    const bundledElectron = process.env.TW_PLUS_SOURCE_BUILD_ELECTRON;
+    const sourceMode = Boolean(bundledElectron);
+    const compilerResources = process.env.TW_PLUS_SOURCE_BUILD_RESOURCES;
     const expectSourceMap = process.env.TW_PLUS_EXPECT_DEVELOPMENT_SOURCE_MAP === '1';
     const expectRuntimeDiagnostic = process.env.TW_PLUS_EXPECT_RUNTIME_DIAGNOSTIC === '1';
     for (const value of [editor, template, testBundle]) assert.ok(value && path.isAbsolute(value),
       'Set TW_PLUS_EDITOR_SOURCE, TW_PLUS_EXTENSION_TEMPLATE_ROOT and TW_PLUS_TEST_EXTENSION_JS');
     if (packagedApp) assert.ok(path.isAbsolute(packagedApp), 'TW_PLUS_DESKTOP_APP_SOURCE must be an absolute path');
     const app = packagedApp || path.resolve(__dirname, '..');
-    const {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild} =
+    const {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild, readDevelopmentFile} =
       require(path.join(app, 'src-main/local-extension-development'));
+    const sourceBuilder = sourceMode && require(path.join(app, 'src-main/standard-extension-source-build'))
+      .createStandardExtensionBuilder({isPackaged: Boolean(compilerResources), resources: compilerResources, executable: bundledElectron});
+    if (sourceMode) assert.ok(sourceBuilder, 'Prepare the published compiler payload before testing');
     const {installLocalEditorAddonDevelopment} = require(path.join(app, 'src-main/local-editor-addon-development'));
     const {chromium, expect} = require(path.join(editor, 'node_modules/@playwright/test'));
     const Zip = require(path.join(editor, 'node_modules/@turbowarp/jszip'));
@@ -53,10 +59,15 @@ test('two independently watched extension folders update one Desktop project and
     const otherFolder = path.join(worktree, 'alternate-greeting-extension');
     for (const directory of [folder, otherFolder]) {
       await fs.mkdir(directory);
-      for (const name of ['src', 'assets', 'vite.config.ts', 'package.json']) {
-        await fs.cp(path.join(template, name), path.join(directory, name), {recursive: true});
+      const names = sourceMode ? ['src', 'extension-build.json', 'package.json', 'pnpm-lock.yaml'] :
+        ['src', 'assets', 'vite.config.ts', 'package.json'];
+      for (const name of names) await fs.cp(path.join(template, name), path.join(directory, name), {recursive: true});
+      if (sourceMode) {
+        // A build must work with no project dependencies, and any attempt to run project Vite config must fail.
+        await fs.writeFile(path.join(directory, 'vite.config.ts'), 'throw new Error("This config must never execute");');
+      } else {
+        await fs.symlink(path.join(template, 'node_modules'), path.join(directory, 'node_modules'), 'junction');
       }
-      await fs.symlink(path.join(template, 'node_modules'), path.join(directory, 'node_modules'), 'junction');
     }
     const metadataPath = path.join(otherFolder, 'src/extension-config.json');
     const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
@@ -70,6 +81,14 @@ test('two independently watched extension folders update one Desktop project and
     assert.notEqual(faultySource, correctedSource);
     const build = async (source, directory = folder) => {
       await fs.writeFile(path.join(directory, 'src/extension.ts'), source);
+      if (sourceMode) {
+        const signal = new AbortController().signal;
+        const snapshot = await sourceBuilder.read(await openDirectory(directory), signal, readDevelopmentFile);
+        const files = await sourceBuilder.build(snapshot, signal);
+        const marker = JSON.parse(files.get('extension-development.json'));
+        return {id: marker.id, bytes: files.get(marker.bundle.file), sha256: marker.bundle.sha256,
+          apiSHA256: marker.api.sha256, sourceMapSHA256: marker.sourceMap.sha256};
+      }
       await exec(process.execPath, [path.join(directory, 'node_modules/vite/bin/vite.js'), 'build', '--mode', 'development'],
         {cwd: directory});
       return readDevelopmentBuild(await openDirectory(directory));
@@ -143,6 +162,7 @@ test('two independently watched extension folders update one Desktop project and
     const failures = [];
     const alerts = [];
     const activity = [];
+    const latestBuilds = new Map();
     page.on('pageerror', error => failures.push(error.message));
     page.on('dialog', async dialog => { failures.push(dialog.message()); await dialog.dismiss(); });
 
@@ -151,6 +171,10 @@ test('two independently watched extension folders update one Desktop project and
     webContents.mainFrame = {url: 'tw-editor://./plus-gui/gui.html'};
     const forTransport = value => value?.bytes ? {...value, bytes: [...value.bytes]} : value;
     webContents.send = (channel, value) => {
+      if (channel === 'local-extension-build') {
+        const {id, sha256, apiSHA256, sourceMapSHA256} = value;
+        latestBuilds.set(id, {sha256, apiSHA256, sourceMapSHA256});
+      }
       activity.push([channel, value?.sha256 ?? value?.code]);
       if (!closing && !page.isClosed()) void page.evaluate(([name, payload]) => window.deliverDesktopIPC(name, payload),
         [channel, forTransport(value)]).catch(error => { if (!closing) failures.push(error.message); });
@@ -158,8 +182,9 @@ test('two independently watched extension folders update one Desktop project and
     const pickedFolders = [folder, otherFolder];
     const consent = [];
     installLocalExtensionDevelopment({on() {}, handle: (channel, handler) => handlers.set(channel, handler)}, webContents, {
+      sourceBuilder,
       chooseDirectory: async () => pickedFolders.shift(),
-      confirm: async (_root, id) => { consent.push(id); return true; }
+      confirm: async (_root, id, mode) => { consent.push([id, mode]); return true; }
     });
     const addonFolder = path.join(worktree, 'turbo-style');
     const plusFolder = path.join(worktree, 'plus-style');
@@ -194,7 +219,7 @@ test('two independently watched extension folders update one Desktop project and
       return forTransport(value);
     });
     await page.exposeFunction('recordDesktopAlert', message => { alerts.push(message); });
-    await page.addInitScript(() => {
+    await page.addInitScript(supportsSourceBuild => {
       const listeners = new Map();
       const subscribe = (name, listener) => { listeners.set(name, listener); return () => listeners.delete(name); };
       window.deliverDesktopIPC = (name, value) => listeners.get(name)?.(value);
@@ -218,7 +243,9 @@ test('two independently watched extension folders update one Desktop project and
           prepared: (...args) => window.invokeDesktopIPC('local-editor-addon-prepared', ...args)
         },
         localExtensions: {
-          start: () => window.invokeDesktopIPC('local-extension-start'),
+          sourceBuild: supportsSourceBuild,
+          start: mode => window.invokeDesktopIPC('local-extension-start', mode),
+          cancelStart: () => window.invokeDesktopIPC('local-extension-cancel-start'),
           stop: (...args) => window.invokeDesktopIPC('local-extension-stop', ...args),
           setEnabled: (...args) => window.invokeDesktopIPC('local-extension-set-enabled', ...args),
           authorize: (...args) => window.invokeDesktopIPC('local-extension-authorize', ...args),
@@ -229,7 +256,7 @@ test('two independently watched extension folders update one Desktop project and
           onStopped: listener => subscribe('local-extension-stopped', listener)
         }
       };
-    });
+    }, sourceMode);
     t.after(() => { if (failures.length) t.diagnostic(failures.join('\n')); });
     await page.goto(`${origin}${prefix}gui.html?lang=en`);
     await page.waitForFunction(() => Boolean(window.vm?.runtime.getTargetForStage()));
@@ -261,7 +288,8 @@ test('two independently watched extension folders update one Desktop project and
     };
     await openManager();
     const manager = page.getByRole('dialog', {name: 'Extension Development Folders'});
-    const addFolder = manager.getByRole('button', {name: 'Add Development Folder…'});
+    const addFolder = manager.getByRole('button', {name: sourceMode ?
+      'Add Folder and Build TypeScript Automatically…' : 'Add Development Folder…'});
     await expect(manager.getByText('No development folders are registered.')).toBeVisible();
     assert.deepEqual(consent, []);
     await addFolder.click();
@@ -273,13 +301,22 @@ test('two independently watched extension folders update one Desktop project and
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
     await expect(firstRow.locator('code:not([title])')).toHaveText(await fs.realpath(folder));
     await expect(secondRow.locator('code:not([title])')).toHaveText(await fs.realpath(otherFolder));
-    assert.deepEqual(consent, [faulty.id, otherInitial.id]);
+    assert.deepEqual(consent, [faulty.id, otherInitial.id].map(id => [id, sourceMode ? 'source' : 'artifact']));
     if (expectRuntimeDiagnostic) {
       await expect(firstRow.locator('code[title]')).toHaveAttribute('title', faulty.sha256);
+      await expect(secondRow.locator('code[title]')).toHaveAttribute('title', otherInitial.sha256);
       await page.evaluate(() => { window.vm.greenFlag(); });
       const line = faultySource.split('\n').indexOf(throwLine) + 1;
       const column = throwLine.indexOf('new Error') + 1;
-      await expect(firstRow.getByRole('status')).toHaveText(`Extension block runtime error src/extension.ts:${line}:${column}`);
+      try {
+        await expect(firstRow.getByRole('status')).toHaveText(`Extension block runtime error src/extension.ts:${line}:${column}`);
+      } catch (error) {
+        t.diagnostic(JSON.stringify({
+          diagnostics: activity.filter(([name]) => name.endsWith('diagnostics') || name.endsWith('diagnostic')),
+          failures
+        }));
+        throw error;
+      }
       await expect(secondRow.getByRole('status')).toHaveCount(0);
       t.diagnostic(`runtime exception resolved to src/extension.ts:${line}:${column}`);
     }
@@ -310,28 +347,51 @@ test('two independently watched extension folders update one Desktop project and
         if (error.code !== 'PROJECT_BUSY') throw error;
       }
     }, id);
-    const watch = spawn(process.execPath,
-      [path.join(folder, 'node_modules/vite/bin/vite.js'), 'build', '--watch', '--mode', 'development'],
-      {cwd: folder, stdio: ['ignore', 'pipe', 'pipe']});
-    const exited = once(watch, 'exit');
-    const stopWatch = () => { if (watch.exitCode === null && watch.signalCode === null) watch.kill(); };
-    t.after(async () => { stopWatch(); await exited.catch(() => {}); });
-    let watchOutput = '';
-    for (const stream of [watch.stdout, watch.stderr]) stream.setEncoding('utf8').on('data', chunk => { watchOutput += chunk; });
-    await expect.poll(() => watchOutput, {timeout: 10_000}).toContain('built in');
-    const previousOutput = watchOutput.length;
-    await fs.writeFile(sourcePath, faultySource + '\nconst = ;\n');
-    await expect.poll(() => watchOutput.slice(previousOutput), {timeout: 10_000}).toMatch(/(?:Transform failed|Build failed)/iu);
-    assert.match(watchOutput.slice(previousOutput), /src[\/]extension\.ts:\d+:\d+/u);
-    assert.equal(await installed(), faulty.sha256);
-    const failedBuildOutput = watchOutput.length;
-    const fixedAt = performance.now();
-    await fs.writeFile(sourcePath, correctedSource);
-    const otherCorrected = await build(correctedSource, otherFolder);
-    await expect.poll(() => watchOutput.slice(failedBuildOutput), {timeout: 10_000}).toContain('built in');
-    const corrected = await readDevelopmentBuild(await openDirectory(folder));
-    stopWatch();
-    await exited;
+    let corrected;
+    let otherCorrected;
+    let fixedAt;
+    if (sourceMode) {
+      await openManager();
+      await fs.writeFile(sourcePath, faultySource + '\nconst = ;\n');
+      await expect(firstRow.getByText('The standard TypeScript build failed. Check the template settings and source.')).toBeVisible();
+      assert.equal(await installed(), faulty.sha256);
+      fixedAt = performance.now();
+      await Promise.all([fs.writeFile(sourcePath, correctedSource), fs.writeFile(path.join(otherFolder, 'src/extension.ts'), correctedSource)]);
+      await expect.poll(() => latestBuilds.get(faulty.id)?.sha256).toMatch(/^[a-f0-9]{64}$/u);
+      await expect.poll(() => latestBuilds.get(otherInitial.id)?.sha256).toMatch(/^[a-f0-9]{64}$/u);
+      corrected = latestBuilds.get(faulty.id);
+      otherCorrected = latestBuilds.get(otherInitial.id);
+      await expect(firstRow.getByText('The standard TypeScript build failed. Check the template settings and source.')).toHaveCount(0);
+      await manager.getByText('Close', {exact: true}).click();
+      for (const directory of [folder, otherFolder]) {
+        await assert.rejects(fs.access(path.join(directory, 'dist')), {code: 'ENOENT'});
+        await assert.rejects(fs.access(path.join(directory, 'node_modules')), {code: 'ENOENT'});
+      }
+      t.diagnostic('the Desktop source worker applied both folders with no external Vite process or local dependencies');
+    } else {
+      const watch = spawn(process.execPath,
+        [path.join(folder, 'node_modules/vite/bin/vite.js'), 'build', '--watch', '--mode', 'development'],
+        {cwd: folder, stdio: ['ignore', 'pipe', 'pipe']});
+      const exited = once(watch, 'exit');
+      const stopWatch = () => { if (watch.exitCode === null && watch.signalCode === null) watch.kill(); };
+      t.after(async () => { stopWatch(); await exited.catch(() => {}); });
+      let watchOutput = '';
+      for (const stream of [watch.stdout, watch.stderr]) stream.setEncoding('utf8').on('data', chunk => { watchOutput += chunk; });
+      await expect.poll(() => watchOutput, {timeout: 10_000}).toContain('built in');
+      const previousOutput = watchOutput.length;
+      await fs.writeFile(sourcePath, faultySource + '\nconst = ;\n');
+      await expect.poll(() => watchOutput.slice(previousOutput), {timeout: 10_000}).toMatch(/(?:Transform failed|Build failed)/iu);
+      assert.match(watchOutput.slice(previousOutput), /src[\/]extension\.ts:\d+:\d+/u);
+      assert.equal(await installed(), faulty.sha256);
+      const failedBuildOutput = watchOutput.length;
+      fixedAt = performance.now();
+      await fs.writeFile(sourcePath, correctedSource);
+      otherCorrected = await build(correctedSource, otherFolder);
+      await expect.poll(() => watchOutput.slice(failedBuildOutput), {timeout: 10_000}).toContain('built in');
+      corrected = await readDevelopmentBuild(await openDirectory(folder));
+      stopWatch();
+      await exited;
+    }
     assert.notEqual(faulty.sha256, corrected.sha256);
     assert.equal(faulty.apiSHA256, corrected.apiSHA256);
     if (expectSourceMap) assert.match(corrected.sourceMapSHA256, /^[a-f0-9]{64}$/u);
@@ -344,7 +404,7 @@ test('two independently watched extension folders update one Desktop project and
       throw error;
     }
     await expect(review).toHaveCount(0);
-    assert.deepEqual(consent, [faulty.id, otherInitial.id]);
+    assert.deepEqual(consent, [faulty.id, otherInitial.id].map(id => [id, sourceMode ? 'source' : 'artifact']));
     assert.equal(await page.evaluate(() => window.vm.runtime.getTargetForStage().variables.unsaved.value), 'unchanged');
     await view.getByRole('button', {name: 'Run all'}).click();
     await expect(result).toHaveAttribute('data-status', 'passed');
@@ -366,13 +426,15 @@ test('two independently watched extension folders update one Desktop project and
       await expect.poll(() => page.evaluate(() => window.developmentDiagnosticGreeting)).toBe('Hello, diagnostic!');
       await expect(firstRow.getByText(/Extension block runtime error/u)).toHaveCount(0);
     }
-    const markerPath = path.join(folder, 'dist', 'extension-development.json');
-    const completedMarker = await fs.readFile(markerPath);
-    await fs.writeFile(markerPath, '{');
-    await expect(firstRow.getByRole('status')).toHaveText('Waiting for a complete and verified build.');
-    await expect(activeBuild).toHaveAttribute('title', corrected.sha256);
-    await fs.writeFile(markerPath, completedMarker);
-    await expect(firstRow.getByRole('status')).toHaveCount(0);
+    if (!sourceMode) {
+      const markerPath = path.join(folder, 'dist', 'extension-development.json');
+      const completedMarker = await fs.readFile(markerPath);
+      await fs.writeFile(markerPath, '{');
+      await expect(firstRow.getByRole('status')).toHaveText('Waiting for a complete and verified build.');
+      await expect(activeBuild).toHaveAttribute('title', corrected.sha256);
+      await fs.writeFile(markerPath, completedMarker);
+      await expect(firstRow.getByRole('status')).toHaveCount(0);
+    }
     await firstRow.getByRole('checkbox').uncheck();
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
     const changedAgain = correctedSource.replace('Hello, {name}!', 'Hello again, {name}!');
@@ -392,7 +454,7 @@ test('two independently watched extension folders update one Desktop project and
     await expect(firstRow.getByRole('alert')).toHaveCount(0);
     await expect(activeBuild).toHaveAttribute('title', firstPaused.sha256);
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
-    assert.deepEqual(consent, [faulty.id, otherInitial.id]);
+    assert.deepEqual(consent, [faulty.id, otherInitial.id].map(id => [id, sourceMode ? 'source' : 'artifact']));
     t.diagnostic('an incompatible registered opcode was rejected, and the corrected build was restored');
 
     await manager.getByText('Close', {exact: true}).click();

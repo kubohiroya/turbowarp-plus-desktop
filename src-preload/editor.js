@@ -64,7 +64,9 @@ contextBridge.exposeInMainWorld('EditorPreload', {
     prepared: (runtimeId, success) => ipcRenderer.invoke('local-editor-addon-prepared', runtimeId, success)
   } : null,
   localExtensions: ipcRenderer.sendSync('local-extension-development-enabled') === true ? {
-    start: () => ipcRenderer.invoke('local-extension-start'),
+    sourceBuild: ipcRenderer.sendSync('local-extension-source-build-enabled') === true,
+    start: mode => ipcRenderer.invoke('local-extension-start', mode),
+    cancelStart: () => ipcRenderer.invoke('local-extension-cancel-start'),
     authorize: (session, id, sha256) => ipcRenderer.invoke('local-extension-authorize', session, id, sha256),
     retainDiagnostics: (...args) => ipcRenderer.invoke('local-extension-retain-diagnostics', ...args),
     resolveDiagnostic: (...args) => ipcRenderer.invoke('local-extension-resolve-diagnostic', ...args),
