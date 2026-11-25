@@ -73,6 +73,11 @@ test('serves only the read tools in their own editor and revokes shares when the
   assert.deepEqual((await call(a, read)).result.structuredContent, {name: read.params.name, args: read.params.arguments});
   assert.equal((await call(a, tool('merge_plan_read_file', {...read.params.arguments, limit: 999999}))).error.code, -32602);
   assert.equal((await call(a, tool('merge_plan_current_playtest', {project: '/other'}))).error.code, -32602);
+  const runtime = tool('merge_plan_current_playtest', {sessionId: 'session', variables: [{id: 'trail', targetId: 'sprite', offset: 32}],
+    logLimit: 5});
+  assert.deepEqual((await call(a, runtime)).result.structuredContent, {name: runtime.params.name, args: runtime.params.arguments});
+  assert.equal((await call(a, tool(runtime.params.name, {variables: [{id: 'x', value: 'write'}]}))).error.code, -32602);
+  assert.equal((await call(a, tool(runtime.params.name, {logLimit: 51}))).error.code, -32602);
   assert.equal((await call(a, tool('merge_plan_write_file', read.params.arguments))).error.code, -32602);
   assert.equal((await rpc({...b, token: a.token}, read)).status, 401);
   first.webContents.emit('did-start-navigation', {isMainFrame: false, isSameDocument: false});

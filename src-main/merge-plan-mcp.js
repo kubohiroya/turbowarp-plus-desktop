@@ -10,6 +10,7 @@ const integers = maximum => ({
   limit: {type: 'integer', minimum: 1, maximum}
 });
 const generationId = {type: 'string', minLength: 1, maxLength: 64};
+const runtimeId = {type: 'string', minLength: 1, maxLength: 256};
 const tool = (name, description, properties = {}, required = []) => ({
   name, description, inputSchema: {type: 'object', properties, required, additionalProperties: false},
   annotations: {readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false}
@@ -20,7 +21,14 @@ const tools = [
     {generationId, ...integers(200)}, ['generationId']),
   tool('merge_plan_read_file', 'Read bytes of an archived path from a saved generation. Use nextOffset for subsequent chunks.',
     {generationId, path: {type: 'string', minLength: 1, maxLength: 4096}, ...integers(32768)}, ['generationId', 'path']),
-  tool('merge_plan_current_playtest', 'Identify the loaded generation being playtested, or return null when no player is open.')
+  tool('merge_plan_current_playtest',
+    'Read the current isolated playtest, stopped block, explicitly requested variables/lists and recent debugger logs. ' +
+    'Omit variables to read no values. Optionally pin the request to a sessionId returned by an earlier call.', {
+      sessionId: generationId,
+      logLimit: {type: 'integer', minimum: 0, maximum: 50},
+      variables: {type: 'array', maxItems: 16, items: {type: 'object', additionalProperties: false,
+        required: ['id'], properties: {id: runtimeId, targetId: runtimeId, offset: {type: 'integer', minimum: 0}}}}
+    })
 ];
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
 const serialize = (res, status, body) => {
@@ -30,15 +38,20 @@ const serialize = (res, status, body) => {
 const rpc = (id, result) => ({jsonrpc: '2.0', id, result});
 const error = (id, code, message) => ({jsonrpc: '2.0', id, error: {code, message}});
 
-function validArguments ({properties, required}, args) {
-  if (!record(args) || required.some(key => !Object.hasOwn(args, key))) return false;
-  return Object.entries(args).every(([key, value]) => {
-    if (!Object.hasOwn(properties, key)) return false;
-    const rule = properties[key];
-    return rule.type === 'integer'
-      ? Number.isSafeInteger(value) && value >= rule.minimum && value <= (rule.maximum ?? Number.MAX_SAFE_INTEGER)
-      : typeof value === 'string' && value.length >= rule.minLength && value.length <= rule.maxLength;
-  });
+function validArguments (rule, value) {
+  switch (rule.type) {
+  case 'object':
+    return record(value) && rule.required.every(key => Object.hasOwn(value, key)) &&
+      Object.entries(value).every(([key, entry]) => Object.hasOwn(rule.properties, key) && validArguments(rule.properties[key], entry));
+  case 'array':
+    return Array.isArray(value) && value.length <= rule.maxItems && value.every(entry => validArguments(rule.items, entry));
+  case 'integer':
+    return Number.isSafeInteger(value) && value >= rule.minimum && value <= (rule.maximum ?? Number.MAX_SAFE_INTEGER);
+  case 'string':
+    return typeof value === 'string' && value.length >= rule.minLength && value.length <= rule.maxLength;
+  default:
+    return false;
+  }
 }
 
 async function dispatch (message, read) {

@@ -9,10 +9,16 @@
 | `merge_plan_list_generations` | 候補ID、世代ID、世代番号、内容ID、元のコミット、競合の選択。任意で `offset` と `limit`。 |
 | `merge_plan_get_generation` | `generationId` で指定した世代の詳細と、保存されたファイルのパス・バイト数。任意で `offset` と `limit`。 |
 | `merge_plan_read_file` | `generationId` と `path` で指定したファイルの内容。ブロックを読むには、パス一覧から `project.source.json` を指定します。 |
-| `merge_plan_current_playtest` | プレーヤーに読み込まれている候補ID、世代ID、内容ID、セッションID、開始・照会時刻。プレーヤーを閉じると `playtest` は `null`。 |
+| `merge_plan_current_playtest` | 試遊の候補・世代・内容・セッションIDと、停止ブロック、指定した値、デバッガーのログ。プレーヤーを閉じると `playtest` は `null`。 |
 
 ファイルの `offset` と `limit` の単位はバイトです。`nextOffset` がある場合は次の読み取りに渡してください。`encoding` は `utf8` または `base64` です。UTF-8文字の途中で区切られた範囲も `base64` でバイト列を取得できます。
 
-MCPの読み取り元は保存済みの候補です。試遊時の変数値やログ、編集中のブロックは共有の対象外です。共有と読み取りによって、作品フォルダやGitの状態は変更されません。「MCP共有を停止」で資格情報を無効にできます。作品の切り替えやDesktopの再読み込み、ウィンドウを閉じた場合も共有が終了します。
+共有中に候補の「試遊」を開くと、その試遊内でブロックのコンテキストメニューからブレークポイントを設定できます。そこで停止したブロックや、マージの競合で停止した位置を `observation.stop` から取得できます。停止位置の理由は `breakpoint` または `merge-conflict` です。停止中のスレッドを特定できる場合は `targetId`、`threadIndex`、`topBlockId` も返します。
+
+`variables` に `[{ "id": "変数またはリストのID" }]` を指定します。IDは世代の `project.source.json` にあります。クローンの値を読む場合は停止位置などから取得した `targetId` を加えます。リストは32項目ずつ返り、続きは `nextOffset` を次の `offset` に渡します。最大16件を指定でき、未指定時は値を取得しません。長い文字列は先頭1024文字を返し、`truncated` で示します。
+
+`logLimit` でデバッガーのログを指定できます。既定は直近20行で、0で省略、最大50行です。`sessionId` を指定すると、その試遊が終了・交代した時点で取得を拒否します。候補の再生中にスクリプトを編集した場合は `modifiedInPlayer` が立ちます。世代ファイルの読み取りは保存済みの内容を返します。
+
+共有と読み取りによって、作品フォルダやGitの状態は変更されません。「MCP共有を停止」で資格情報を無効にできます。ローカルGitパネルを閉じた場合、作品の切り替え、Desktopの再読み込みやウィンドウを閉じた場合も共有が終了します。
 
 切り戻す場合は `TW_PLUS_DESKTOP_MERGE_PLAN_MCP=0` でDesktopを再起動します。保存済みの候補はそのまま使えます。
