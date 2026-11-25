@@ -177,13 +177,17 @@ test('two independently watched extension folders update one Desktop project and
       await expect(menu).toHaveCSS('background-color', 'rgb(255, 255, 255)');
       return menu;
     };
-    const menu = await openDesktopMenu();
-    await expect(menu.getByRole('menuitem')).toHaveText([
-      'Open Extension Development Folder…', 'Stop Extension Live Reload'
-    ]);
-    await menu.getByRole('menuitem', {name: 'Open Extension Development Folder…'}).click();
+    const openManager = async () => {
+      const menu = await openDesktopMenu();
+      await expect(menu.getByRole('menuitem')).toHaveText(['Extension Development Folders…']);
+      await menu.getByRole('menuitem', {name: 'Extension Development Folders…'}).click();
+    };
+    await openManager();
     const manager = page.getByRole('dialog', {name: 'Extension Development Folders'});
     const addFolder = manager.getByRole('button', {name: 'Add Development Folder…'});
+    await expect(manager.getByText('No development folders are registered.')).toBeVisible();
+    assert.deepEqual(consent, []);
+    await addFolder.click();
     await expect(manager.getByText('TurboWarp-Example-Extension', {exact: true})).toBeVisible();
     await addFolder.click();
     const firstRow = manager.locator('li').filter({hasText: faulty.id});
@@ -241,7 +245,7 @@ test('two independently watched extension folders update one Desktop project and
     assert.equal(await installed(), corrected.sha256);
     t.diagnostic(`same assertion ${assertId}: "Wrong, Scratch!" failed, "Hello, Scratch!" passed`);
 
-    await (await openDesktopMenu()).getByRole('menuitem', {name: 'Stop Extension Live Reload'}).click();
+    await openManager();
     await expect(firstRow.getByRole('checkbox')).toBeChecked();
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
     await firstRow.getByRole('checkbox').uncheck();

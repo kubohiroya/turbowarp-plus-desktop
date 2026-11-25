@@ -18,7 +18,6 @@ function DesktopSettingsMenu () {
 
   const add = async () => {
     if (adding) return;
-    setOpen(true);
     setAdding(true);
     try {
       await menu.development.onAdd();
@@ -27,8 +26,7 @@ function DesktopSettingsMenu () {
     }
   };
   const items = [
-    {id: 'open-development-folder', label: menu.startLabel, onSelect: () => { void add(); }},
-    {id: 'stop-extension-reload', label: menu.stopLabel, onSelect: () => setOpen(true)}
+    {id: 'extension-development-folders', label: menu.foldersLabel, onSelect: () => setOpen(true)}
   ];
   return <>
     <IconMenuButton label={menu.label} items={items} icon="⚙️" className={styles.settingsMenu} />

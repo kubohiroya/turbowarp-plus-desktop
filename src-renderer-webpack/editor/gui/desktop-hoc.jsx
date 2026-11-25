@@ -82,7 +82,7 @@ const DEFAULT_USERNAME = 'player';
 
 const developmentText = (locale) => locale.startsWith('ja') ? {
   menu: 'デスクトップメニュー',
-  start: '拡張ブロックの開発フォルダを開く…', stop: '拡張ブロックの自動更新を停止',
+  folders: '拡張ブロックの開発フォルダ…',
   LOCAL_EXTENSION_ALREADY_WATCHING: 'このフォルダ、または同じ拡張ブロック ID のフォルダは監視中です。',
   LOCAL_EXTENSION_BUILD_REQUIRED: '開発フォルダに拡張ブロックの完成ビルドがありません。テンプレートでビルドしてから開いてください。',
   LOCAL_EXTENSION_CONFLICT: '作品の同じ ID の拡張ブロックは別のビルドです。開発フォルダの監視を停止しました。',
@@ -92,7 +92,7 @@ const developmentText = (locale) => locale.startsWith('ja') ? {
   PROJECT_RECOVERY_REQUIRED: '拡張ブロックの更新後に作品を復旧できませんでした。監視を停止しました。',
   LOCAL_EXTENSION_UNAVAILABLE: 'このEditorでは拡張ブロックの開発フォルダを開けません。'
 } : {
-  menu: 'Desktop menu', start: 'Open Extension Development Folder…', stop: 'Stop Extension Live Reload',
+  menu: 'Desktop menu', folders: 'Extension Development Folders…',
   LOCAL_EXTENSION_ALREADY_WATCHING: 'This folder, or a folder with the same extension ID, is already being watched.',
   LOCAL_EXTENSION_BUILD_REQUIRED: 'Build the extension with the template before opening the development folder.',
   LOCAL_EXTENSION_CONFLICT: 'The project already uses a different build of this extension. Watching stopped.',
@@ -253,8 +253,7 @@ const DesktopHOC = function (WrappedComponent) {
       ];
       const menu = EditorPreload.localExtensions ? {
         label: development.menu,
-        startLabel: development.start,
-        stopLabel: development.stop,
+        foldersLabel: development.folders,
         development: {
           locale,
           sessions: this.state.developmentSessions,
