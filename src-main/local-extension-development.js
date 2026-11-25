@@ -1,6 +1,7 @@
 const {constants} = require('node:fs');
 const fs = require('node:fs/promises');
 const {createHash, randomUUID} = require('node:crypto');
+const {SourceMap} = require('node:module');
 const path = require('node:path');
 
 const descriptorName = 'extension-development.json';
@@ -10,6 +11,7 @@ const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino;
 const failure = code => Object.assign(new Error(code), {code});
 const json = bytes => JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes));
+const coordinate = value => Number.isSafeInteger(value) && value > 0 && value <= 9999999;
 
 const directory = async name => {
   const stat = await fs.lstat(name);
@@ -56,9 +58,10 @@ const assertSourceMap = (bytes, bundleFile) => {
       typeof map.mappings !== 'string' || !/^[a-z\d+/;,]*$/iu.test(map.mappings)) {
     throw failure('LOCAL_EXTENSION_DESCRIPTOR');
   }
+  return map;
 };
 
-const readDevelopmentBuild = async ({root, identity}) => {
+const readSnapshot = async ({root, identity}) => {
   if (!sameFile(identity, await directory(root))) throw failure('LOCAL_EXTENSION_BOUNDARY');
   const dist = path.join(root, 'dist');
   const distIdentity = await directory(dist);
@@ -82,14 +85,19 @@ const readDevelopmentBuild = async ({root, identity}) => {
   if (!marker.equals(await readFile(descriptorPath, 8192)) || sha256(bytes) !== spec.bundle.sha256 ||
       sha256(manifest) !== spec.api.sha256 ||
       (map && sha256(map) !== sourceMap.sha256)) throw failure('LOCAL_EXTENSION_INCOMPLETE');
-  if (map) assertSourceMap(map, spec.bundle.file);
+  const sourceMapPayload = map && assertSourceMap(map, spec.bundle.file);
   const api = json(manifest);
   if (api?.id !== spec.id || api.formatVersion !== 1 || !Array.isArray(api.blocks) || !Array.isArray(api.menus)) {
     throw failure('LOCAL_EXTENSION_DESCRIPTOR');
   }
-  return {id: spec.id, sha256: spec.bundle.sha256, apiSHA256: spec.api.sha256, bytes: new Uint8Array(bytes),
+  const build = {id: spec.id, sha256: spec.bundle.sha256, apiSHA256: spec.api.sha256, bytes: new Uint8Array(bytes),
     ...(sourceMap && {sourceMapSHA256: sourceMap.sha256})};
+  return {build, diagnostic: {sha256: build.sha256, sourceMapSHA256: build.sourceMapSHA256, sourceMapPayload}};
 };
+
+const readDevelopmentBuild = async target => (await readSnapshot(target)).build;
+const matchBuild = (snapshot, sha256, sourceMapSHA256) =>
+  snapshot?.sha256 === sha256 && snapshot.sourceMapSHA256 === sourceMapSHA256;
 
 function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, confirm, intervalMs = 350}) {
   const leases = new Map();
@@ -118,8 +126,8 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     clearTimeout(current.timer);
   };
   const readCompatible = async current => {
-    const next = await readDevelopmentBuild(current.directory);
-    if (next.id !== current.id || next.apiSHA256 !== current.apiSHA256) throw failure('LOCAL_EXTENSION_INCOMPATIBLE');
+    const next = await readSnapshot(current.directory);
+    if (next.build.id !== current.id || next.build.apiSHA256 !== current.apiSHA256) throw failure('LOCAL_EXTENSION_INCOMPATIBLE');
     return next;
   };
   const schedule = current => {
@@ -128,12 +136,13 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     if (!isCurrent(current, generation)) return;
     current.timer = setTimeout(async () => {
       try {
-        const next = await readCompatible(current);
+        const snapshot = await readCompatible(current);
+        const {build: next, diagnostic} = snapshot;
         if (!isCurrent(current, generation)) return;
         current.missed = false;
         publishArtifacts(current, false);
         if (next.sha256 !== current.sha256 || next.sourceMapSHA256 !== current.sourceMapSHA256) {
-          Object.assign(current, {sha256: next.sha256, sourceMapSHA256: next.sourceMapSHA256});
+          Object.assign(current, {sha256: next.sha256, sourceMapSHA256: next.sourceMapSHA256, diagnostic});
           webContents.send('local-extension-build', {...next, session: current.session});
         }
       } catch (error) {
@@ -166,7 +175,8 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
       const selected = await chooseDirectory();
       if (!selected || opening !== ticket) return null;
       const selectedDirectory = await openDirectory(selected);
-      const build = await readDevelopmentBuild(selectedDirectory);
+      const snapshot = await readSnapshot(selectedDirectory);
+      const {build, diagnostic} = snapshot;
       if (opening !== ticket) return null;
       if (Array.from(leases.values()).some(current => current.id === build.id ||
           sameFile(current.directory.identity, selectedDirectory.identity))) {
@@ -176,7 +186,7 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
       const session = randomUUID();
       const current = {directory: selectedDirectory, id: build.id, apiSHA256: build.apiSHA256,
         sha256: build.sha256, sourceMapSHA256: build.sourceMapSHA256, session, enabled: true, generation: 0,
-        waiting: false, missed: false};
+        waiting: false, missed: false, diagnostic, staged: null, applied: null};
       leases.set(session, current);
       schedule(current);
       return {...build, session, directory: selectedDirectory.root};
@@ -191,6 +201,35 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     const current = leases.get(session);
     return Boolean(current?.enabled && current.id === id && current.sha256 === digest);
   });
+  handle('retain-diagnostics', (session, sha256, mapSHA256, applied) => {
+    const current = leases.get(session);
+    if (!current?.enabled || typeof sha256 !== 'string' || !digest.test(sha256) || typeof applied !== 'boolean' ||
+        (mapSHA256 !== undefined && (typeof mapSHA256 !== 'string' || !digest.test(mapSHA256)))) return false;
+    if (!applied) {
+      if (!matchBuild(current.diagnostic, sha256, mapSHA256)) return false;
+      current.staged = current.diagnostic;
+    } else {
+      if (!matchBuild(current.staged, sha256, mapSHA256)) return false;
+      current.applied = current.staged.sourceMapPayload ? current.staged : null;
+      current.staged = null;
+    }
+    return true;
+  });
+  handle('resolve-diagnostic', (session, sha256, mapSHA256, line, column) => {
+    const current = leases.get(session);
+    if (!current || typeof sha256 !== 'string' || typeof mapSHA256 !== 'string' ||
+        !coordinate(line) || !coordinate(column) || !matchBuild(current.applied, sha256, mapSHA256)) return null;
+    try {
+      const map = current.applied;
+      map.index ??= new SourceMap(map.sourceMapPayload);
+      const {originalSource: file, originalLine, originalColumn, generatedLine} = map.index.findEntry(line - 1, column - 1);
+      if (generatedLine !== line - 1 || typeof file !== 'string' || !projectSource.test(file) ||
+          !coordinate(originalLine + 1) || !coordinate(originalColumn + 1)) return null;
+      return {file, line: originalLine + 1, column: originalColumn + 1};
+    } catch {
+      return null;
+    }
+  });
   handle('set-enabled', async (session, enabled) => {
     const current = leases.get(session);
     if (!current || typeof enabled !== 'boolean') throw failure('LOCAL_EXTENSION_UNAVAILABLE');
@@ -200,15 +239,16 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     }
     if (current.enabled) throw failure('LOCAL_EXTENSION_BUSY');
     const generation = ++current.generation;
-    let build;
+    let snapshot;
     try {
-      build = await readCompatible(current);
+      snapshot = await readCompatible(current);
     } catch (error) {
       if (['LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_INCOMPATIBLE'].includes(error.code)) throw error;
       throw failure('LOCAL_EXTENSION_BUILD_REQUIRED');
     }
     if (!isCurrent(current, generation)) return null;
-    Object.assign(current, {enabled: true, sha256: build.sha256, sourceMapSHA256: build.sourceMapSHA256});
+    const {build, diagnostic} = snapshot;
+    Object.assign(current, {enabled: true, sha256: build.sha256, sourceMapSHA256: build.sourceMapSHA256, diagnostic});
     schedule(current);
     return {...build, session};
   });

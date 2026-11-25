@@ -76,6 +76,50 @@ test('a development snapshot verifies its optional map without exposing its cont
   await assert.rejects(readDevelopmentBuild(directory), {code: 'LOCAL_EXTENSION_DESCRIPTOR'});
 });
 
+test('runtime coordinates resolve only through the map of the applied build', {timeout: 5000}, async t => {
+  const {root, publish, files} = await fixture(t);
+  const build = async (code, mappings) => {
+    await publish(code);
+    const descriptor = JSON.parse(await fs.readFile(files.marker, 'utf8'));
+    const body = JSON.stringify({version: 3, file: 'fixture.js', sources: ['src/extension.ts'], names: [], mappings});
+    const sourceMap = {file: 'fixture.js.map', sha256: sha256(body)};
+    await fs.writeFile(files.map, body);
+    await fs.writeFile(files.marker, JSON.stringify({...descriptor, sourceMap}));
+    return [descriptor.bundle.sha256, sourceMap.sha256];
+  };
+  const first = await build('first', 'AAEC');
+  const contents = new EventEmitter();
+  contents.mainFrame = {url: 'tw-editor://./plus-gui/gui.html'};
+  contents.send = (...args) => contents.emit(...args);
+  const handlers = new Map();
+  installLocalExtensionDevelopment({on() {}, handle: (name, handler) => handlers.set(name, handler)}, contents,
+    {chooseDirectory: async () => root, confirm: async () => true, intervalMs: 20});
+  t.after(() => contents.emit('destroyed'));
+  const event = {sender: contents, senderFrame: contents.mainFrame};
+  const invoke = (name, ...args) => handlers.get('local-extension-' + name)(event, ...args);
+  const {session} = await invoke('start');
+  const retain = (...args) => invoke('retain-diagnostics', session, ...args);
+  const resolve = (...args) => invoke('resolve-diagnostic', session, ...args);
+  assert.equal(retain(...first, true), false);
+  assert.equal(retain(...first, false), true);
+  assert.equal(retain(...first, true), true);
+  assert.deepEqual(resolve(...first, 1, 1), {file: 'src/extension.ts', line: 3, column: 2});
+  const update = once(contents, 'local-extension-build');
+  const second = await build('second', 'AAGC');
+  await update;
+  assert.equal(retain(...second, false), true);
+  assert.equal(resolve(...second, 1, 1), null);
+  assert.equal(resolve(first[0], second[1], 1, 1), null);
+  assert.equal(resolve(...first, 2, 1), null);
+  assert.equal(resolve(...first, '1', 1), null);
+  assert.deepEqual(resolve(...first, 1, 1), {file: 'src/extension.ts', line: 3, column: 2});
+  assert.equal(retain(...second, true), true);
+  assert.equal(resolve(...first, 1, 1), null);
+  assert.deepEqual(resolve(...second, 1, 1), {file: 'src/extension.ts', line: 4, column: 2});
+  invoke('stop', session);
+  assert.equal(resolve(...second, 1, 1), null);
+});
+
 test('retries an atomic artifact replacement after opening its previous inode', async t => {
   const {files, publish} = await fixture(t);
   await publish('first');

@@ -3,6 +3,7 @@ import {getExtensionAuthoringHost} from './local-extension-authoring.js';
 export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsChanged) => {
   const sessions = new Map();
   const decoder = new TextDecoder();
+  const sourceDecoder = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true});
   const pending = new Map();
   let opening = null;
   let running = false;
@@ -10,9 +11,25 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
 
   const publishSessions = () => {
     if (disposed) return;
-    onSessionsChanged(Array.from(sessions, ([token, {directory, id, sourceHeader, enabled, busy, error, sha256, waiting}]) =>
-      ({token, directory, id, sourceHeader, enabled, busy, error, appliedDigest: sha256, waiting})));
+    onSessionsChanged(Array.from(sessions, ([token, {directory, id, sourceHeader, enabled, busy, error, sha256, waiting, diagnostic}]) =>
+      ({token, directory, id, sourceHeader, enabled, busy, error, appliedDigest: sha256, waiting, diagnostic})));
   };
+
+  const unsubscribeDiagnostic = host.resolveDiagnostic &&
+    vm.extensionManager.getExtensionServicePort?.()?.observeSandboxErrors?.(({id, code, line, column}) => {
+      const entry = Array.from(sessions).find(([, session]) => session.id === id && session.diagnosticBuild?.code === code);
+      if (!entry) return;
+      const [token, session] = entry;
+      const build = session.diagnosticBuild;
+      if (build.resolving || (build.lastLine === line && build.lastColumn === column)) return;
+      Object.assign(build, {lastLine: line, lastColumn: column, resolving: true});
+      void host.resolveDiagnostic(token, build.sha256, build.sourceMapSHA256, line, column).then(diagnostic => {
+        if (diagnostic && sessions.get(token) === session && session.diagnosticBuild === build) {
+          session.diagnostic = diagnostic;
+          publishSessions();
+        }
+      }).catch(() => {}).finally(() => { build.resolving = false; });
+    });
 
   const pause = (session, token) => {
     session.enabled = false;
@@ -62,11 +79,26 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
       session.sha256 = installed?.sha256 ?? null;
     }
     if (sessions.get(build.session) !== session) return;
+    const mappingChanged = build.sha256 !== session.sha256 ||
+      build.sourceMapSHA256 !== session.diagnosticBuild?.sourceMapSHA256;
+    const retainMapping = mappingChanged && unsubscribeDiagnostic && host.retainDiagnostics &&
+      await host.retainDiagnostics(build.session, build.sha256, build.sourceMapSHA256, false).catch(() => false);
+    if (sessions.get(build.session) !== session || controller.signal.aborted) return;
     if (build.sha256 !== session.sha256) {
       await authoring.applyDevelopmentBuild({id: build.id, sha256: build.sha256,
         previousSHA256: session.sha256 ?? undefined, bytes: new Uint8Array(build.bytes)},
       ({id, sha256}) => host.authorize(build.session, id, sha256), {signal: controller.signal});
       session.sha256 = build.sha256;
+    }
+    if (mappingChanged) {
+      session.diagnostic = null;
+      session.diagnosticBuild = null;
+      const retained = retainMapping &&
+        await host.retainDiagnostics(build.session, build.sha256, build.sourceMapSHA256, true).catch(() => false);
+      if (retained && build.sourceMapSHA256 && sessions.get(build.session) === session) {
+        session.diagnosticBuild = {sha256: build.sha256, sourceMapSHA256: build.sourceMapSHA256,
+          code: sourceDecoder.decode(new Uint8Array(build.bytes))};
+      }
     }
     session.sourceHeader = readHeader(build);
     session.error = null;
@@ -213,6 +245,7 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
     },
     dispose () {
       disposed = true;
+      unsubscribeDiagnostic?.();
       unsubscribeBuild();
       unsubscribeArtifacts();
       unsubscribeStopped();

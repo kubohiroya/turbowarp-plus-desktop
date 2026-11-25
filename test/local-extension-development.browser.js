@@ -24,6 +24,7 @@ test('two independently watched extension folders update one Desktop project and
     const template = process.env.TW_PLUS_EXTENSION_TEMPLATE_ROOT;
     const testBundle = process.env.TW_PLUS_TEST_EXTENSION_JS;
     const expectSourceMap = process.env.TW_PLUS_EXPECT_DEVELOPMENT_SOURCE_MAP === '1';
+    const expectRuntimeDiagnostic = process.env.TW_PLUS_EXPECT_RUNTIME_DIAGNOSTIC === '1';
     for (const value of [editor, template, testBundle]) assert.ok(value && path.isAbsolute(value),
       'Set TW_PLUS_EDITOR_SOURCE, TW_PLUS_EXTENSION_TEMPLATE_ROOT and TW_PLUS_TEST_EXTENSION_JS');
     const {chromium, expect} = require(path.join(editor, 'node_modules/@playwright/test'));
@@ -52,7 +53,10 @@ test('two independently watched extension folders update one Desktop project and
     await fs.writeFile(metadataPath, JSON.stringify({...metadata, id: 'alternategreeting', name: 'Alternate Greeting'}));
     const sourcePath = path.join(folder, 'src/extension.ts');
     const correctedSource = await fs.readFile(sourcePath, 'utf8');
-    const faultySource = correctedSource.replace('Hello, {name}!', 'Wrong, {name}!');
+    const throwLine = '    if (args.NAME === "diagnostic") throw new Error("fixture runtime failure");';
+    let faultySource = correctedSource.replace('Hello, {name}!', 'Wrong, {name}!');
+    if (expectRuntimeDiagnostic) faultySource = faultySource.replace(
+      'public hello(args: {NAME: unknown}): string {\n', `public hello(args: {NAME: unknown}): string {\n${throwLine}\n`);
     assert.notEqual(faultySource, correctedSource);
     const build = async (source, directory = folder) => {
       await fs.writeFile(path.join(directory, 'src/extension.ts'), source);
@@ -75,6 +79,16 @@ test('two independently watched extension folders update one Desktop project and
       greeting: {opcode: `${faulty.id}_hello`, next: null, parent: assertId,
         inputs: {NAME: [1, [10, 'Scratch']]}, fields: {}, shadow: false, topLevel: false}
     };
+    if (expectRuntimeDiagnostic) {
+      Object.assign(blocks, {
+        'diagnostic-start': {opcode: 'event_whenflagclicked', next: 'diagnostic-say', parent: null,
+          inputs: {}, fields: {}, shadow: false, topLevel: true, x: 260, y: 40},
+        'diagnostic-say': {opcode: 'looks_say', next: null, parent: 'diagnostic-start',
+          inputs: {MESSAGE: [2, 'diagnostic-greeting']}, fields: {}, shadow: false, topLevel: false},
+        'diagnostic-greeting': {opcode: `${faulty.id}_hello`, next: null, parent: 'diagnostic-say',
+          inputs: {NAME: [1, [10, 'diagnostic']]}, fields: {}, shadow: false, topLevel: false}
+      });
+    }
     const zip = await Zip.loadAsync(await project({id: faulty.id, execution: 'sandboxed', code: faulty.bytes,
       sha256: faulty.sha256, stageBlocks: blocks, embeddedPath: `extensions/${faulty.id}.js`}));
     const json = JSON.parse(await zip.file('project.json').async('string'));
@@ -198,6 +212,8 @@ test('two independently watched extension folders update one Desktop project and
           stop: (...args) => window.invokeDesktopIPC('local-extension-stop', ...args),
           setEnabled: (...args) => window.invokeDesktopIPC('local-extension-set-enabled', ...args),
           authorize: (...args) => window.invokeDesktopIPC('local-extension-authorize', ...args),
+          retainDiagnostics: (...args) => window.invokeDesktopIPC('local-extension-retain-diagnostics', ...args),
+          resolveDiagnostic: (...args) => window.invokeDesktopIPC('local-extension-resolve-diagnostic', ...args),
           onBuild: listener => subscribe('local-extension-build', listener),
           onArtifacts: listener => subscribe('local-extension-artifacts', listener),
           onStopped: listener => subscribe('local-extension-stopped', listener)
@@ -248,6 +264,15 @@ test('two independently watched extension folders update one Desktop project and
     await expect(firstRow.locator('code:not([title])')).toHaveText(await fs.realpath(folder));
     await expect(secondRow.locator('code:not([title])')).toHaveText(await fs.realpath(otherFolder));
     assert.deepEqual(consent, [faulty.id, otherInitial.id]);
+    if (expectRuntimeDiagnostic) {
+      await expect(firstRow.locator('code[title]')).toHaveAttribute('title', faulty.sha256);
+      await page.evaluate(() => { window.vm.greenFlag(); });
+      const line = faultySource.split('\n').indexOf(throwLine) + 1;
+      const column = throwLine.indexOf('new Error') + 1;
+      await expect(firstRow.getByRole('status')).toHaveText(`Extension block runtime error src/extension.ts:${line}:${column}`);
+      await expect(secondRow.getByRole('status')).toHaveCount(0);
+      t.diagnostic(`runtime exception resolved to src/extension.ts:${line}:${column}`);
+    }
     await manager.getByText('Close', {exact: true}).click();
 
     try {
@@ -323,6 +348,14 @@ test('two independently watched extension folders update one Desktop project and
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
     const activeBuild = firstRow.locator('code[title]');
     await expect(activeBuild).toHaveAttribute('title', corrected.sha256);
+    if (expectRuntimeDiagnostic) {
+      await page.evaluate(() => {
+        window.vm.runtime.once('SAY', (_target, _type, message) => { window.developmentDiagnosticGreeting = message; });
+        window.vm.greenFlag();
+      });
+      await expect.poll(() => page.evaluate(() => window.developmentDiagnosticGreeting)).toBe('Hello, diagnostic!');
+      await expect(firstRow.getByText(/Extension block runtime error/u)).toHaveCount(0);
+    }
     const markerPath = path.join(folder, 'dist', 'extension-development.json');
     const completedMarker = await fs.readFile(markerPath);
     await fs.writeFile(markerPath, '{');
