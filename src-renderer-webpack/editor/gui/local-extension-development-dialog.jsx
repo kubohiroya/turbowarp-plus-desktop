@@ -17,15 +17,26 @@ const messages = locale => locale.startsWith('ja') ? {
   empty: 'No development folders are registered.'
 };
 
+const addonMessages = locale => locale.startsWith('ja') ? {
+  title: 'エディタアドオンの開発フォルダ',
+  intro: 'チェックしたフォルダのスタイルをエディターに適用し、変更を監視します。チェックを外すとスタイルを取り外します。',
+  formats: {turbowarp: 'TurboWarp 形式', plus: 'Plus Editor 追加機能パッケージ'}
+} : {
+  title: 'Editor Add-on Development Folders',
+  intro: 'Checked folders apply their styles to the editor and watch for updates. Uncheck a folder to remove its styles.',
+  formats: {turbowarp: 'TurboWarp format', plus: 'Plus Editor add-on package'}
+};
+
 function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove}) {
-  const {name, description, descriptions, author, license, version} = parseExtensionMetadata(session.sourceHeader);
+  const {name, description, descriptions, author, license, version} = session.metadata ?? parseExtensionMetadata(session.sourceHeader);
   return <ExtensionRow
     metadata={{name, description, descriptions, author, license, version}}
     ids={[session.id]}
     locale={locale}
     previewCache={null}
-    pick={{checked: session.enabled, disabled: session.busy, onToggle: () => onToggle(session.token, !session.enabled)}}
+    pick={{checked: session.enabled, disabled: session.busy || Boolean(session.unavailable), onToggle: () => onToggle(session.token, !session.enabled)}}
     details={<div className={styles.developmentPath}>
+      {session.format && <span>{text.formats[session.format]}</span>}
       <strong>{text.folder}</strong>
       <code>{session.directory}</code>
     </div>}
@@ -37,8 +48,8 @@ function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove})
   </ExtensionRow>;
 }
 
-export function LocalExtensionDevelopmentDialog ({locale, sessions, error, errorText, adding, onClose, onAdd, onToggle, onRemove}) {
-  const text = messages(locale);
+export function LocalExtensionDevelopmentDialog ({locale, sessions, error, errorText, adding, onClose, onAdd, onToggle, onRemove, kind}) {
+  const text = {...messages(locale), ...(kind === 'addon' && addonMessages(locale))};
   return <Modal contentLabel={text.title} className={reviewStyles.frame} onRequestClose={onClose}>
     <div className={`${reviewStyles.body} ${styles.developmentBody}`}>
       <div className={`twextsec-review ${styles.developmentReview}`}>

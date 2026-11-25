@@ -185,4 +185,4 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
   webContents.once('destroyed', close);
 }
 
-module.exports = {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild};
+module.exports = {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild, readDevelopmentFile: readFile};

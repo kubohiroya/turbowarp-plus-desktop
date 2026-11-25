@@ -8,6 +8,7 @@ const {tmpdir} = require('node:os');
 const {test} = require('node:test');
 const {promisify} = require('node:util');
 const {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild} = require('../src-main/local-extension-development');
+const {installLocalEditorAddonDevelopment} = require('../src-main/local-editor-addon-development');
 
 const exec = promisify(execFile);
 const origin = 'http://localhost:41015';
@@ -82,7 +83,13 @@ test('two independently watched extension folders update one Desktop project and
     const args = ['--enable-unsafe-swiftshader'];
     if (process.platform === 'darwin') args.push('--single-process', '--no-zygote', '--disable-crash-reporter');
     const browser = await chromium.launch({headless: true, args});
-    t.after(() => browser.close());
+    let closeDesktop;
+    let closing = false;
+    t.after(async () => {
+      closing = true;
+      closeDesktop?.();
+      await browser.close();
+    });
     const context = await browser.newContext({serviceWorkers: 'block'});
     await context.route('**/*', async route => {
       const url = new URL(route.request().url());
@@ -115,8 +122,8 @@ test('two independently watched extension folders update one Desktop project and
     const forTransport = value => value?.bytes ? {...value, bytes: [...value.bytes]} : value;
     webContents.send = (channel, value) => {
       activity.push([channel, value?.sha256 ?? value?.code]);
-      if (!page.isClosed()) void page.evaluate(([name, payload]) => window.deliverDesktopIPC(name, payload),
-        [channel, forTransport(value)]).catch(error => failures.push(error.message));
+      if (!closing && !page.isClosed()) void page.evaluate(([name, payload]) => window.deliverDesktopIPC(name, payload),
+        [channel, forTransport(value)]).catch(error => { if (!closing) failures.push(error.message); });
     };
     const pickedFolders = [folder, otherFolder];
     const consent = [];
@@ -124,7 +131,33 @@ test('two independently watched extension folders update one Desktop project and
       chooseDirectory: async () => pickedFolders.shift(),
       confirm: async (_root, id) => { consent.push(id); return true; }
     });
-    t.after(() => webContents.emit('destroyed'));
+    const addonFolder = path.join(worktree, 'turbo-style');
+    const plusFolder = path.join(worktree, 'plus-style');
+    await Promise.all([fs.mkdir(addonFolder), fs.mkdir(plusFolder)]);
+    await Promise.all([
+      fs.writeFile(path.join(addonFolder, 'addon.json'), JSON.stringify({name: 'Turbo Style',
+        userstyles: [{url: 'main.css', matches: ['projects']}]})),
+      fs.writeFile(path.join(plusFolder, 'package.json'), JSON.stringify({name: 'plus-style', displayName: 'Plus Style',
+        turbowarpPlusEditor: {addon: {styles: ['main.css']}}})),
+      fs.writeFile(path.join(addonFolder, 'main.css'), 'body { --turbo-style: first; }'),
+      fs.writeFile(path.join(plusFolder, 'main.css'), 'body { --plus-style: first; }')
+    ]);
+    const styles = new Map();
+    let styleKey = 0;
+    webContents.isDestroyed = () => page.isClosed();
+    webContents.insertCSS = async css => {
+      const key = String(++styleKey);
+      styles.set(key, await page.addStyleTag({content: css}));
+      return key;
+    };
+    webContents.removeInsertedCSS = async key => {
+      await styles.get(key)?.evaluate(node => node.remove());
+      styles.delete(key);
+    };
+    const addonFolders = [addonFolder, plusFolder];
+    installLocalEditorAddonDevelopment({on() {}, handle: (name, handler) => handlers.set(name, handler)}, webContents,
+      {chooseDirectory: async () => addonFolders.shift(), confirm: async () => true, intervalMs: 75});
+    closeDesktop = () => webContents.emit('destroyed');
     await page.exposeFunction('invokeDesktopIPC', async (name, ...args) => {
       const value = await handlers.get(name)({sender: webContents, senderFrame: webContents.mainFrame}, ...args);
       activity.push([name, value?.sha256 ?? value]);
@@ -143,6 +176,13 @@ test('two independently watched extension folders update one Desktop project and
         setLocale: () => ({strings: {'prompt.ok': 'OK', 'prompt.cancel': 'Cancel',
           'in-app-about.desktop-settings': 'Desktop Settings', 'in-app-about.privacy': 'Privacy Policy',
           'in-app-about.about': 'About', 'in-app-about.source-code': 'Source Code'}}),
+        localEditorAddons: {
+          list: () => window.invokeDesktopIPC('local-editor-addon-list'),
+          start: () => window.invokeDesktopIPC('local-editor-addon-start'),
+          setEnabled: (...args) => window.invokeDesktopIPC('local-editor-addon-set-enabled', ...args),
+          remove: token => window.invokeDesktopIPC('local-editor-addon-remove', token),
+          onChange: listener => subscribe('local-editor-addon-change', listener)
+        },
         localExtensions: {
           start: () => window.invokeDesktopIPC('local-extension-start'),
           stop: (...args) => window.invokeDesktopIPC('local-extension-stop', ...args),
@@ -179,7 +219,7 @@ test('two independently watched extension folders update one Desktop project and
     };
     const openManager = async () => {
       const menu = await openDesktopMenu();
-      await expect(menu.getByRole('menuitem')).toHaveText(['Extension Development Folders…']);
+      await expect(menu.getByRole('menuitem')).toHaveText(['Extension Development Folders…', 'Editor Add-on Development Folders…']);
       await menu.getByRole('menuitem', {name: 'Extension Development Folders…'}).click();
     };
     await openManager();
@@ -268,6 +308,30 @@ test('two independently watched extension folders update one Desktop project and
     t.diagnostic('an incompatible registered opcode was rejected, and the corrected build was restored');
 
     await manager.getByText('Close', {exact: true}).click();
+    await (await openDesktopMenu()).getByRole('menuitem', {name: 'Editor Add-on Development Folders…'}).click();
+    const addons = page.getByRole('dialog', {name: 'Editor Add-on Development Folders'});
+    const addAddon = addons.getByRole('button', {name: 'Add Development Folder…'});
+    await addAddon.click();
+    const turboCheckbox = addons.getByRole('checkbox', {name: 'Turbo Style'});
+    await expect(turboCheckbox).toBeChecked();
+    await addAddon.click();
+    const plusCheckbox = addons.getByRole('checkbox', {name: 'Plus Style'});
+    await expect(plusCheckbox).toBeChecked();
+    const property = name => page.evaluate(key => getComputedStyle(document.body).getPropertyValue(key).trim(), name);
+    await expect.poll(() => property('--turbo-style')).toBe('first');
+    await turboCheckbox.click();
+    await expect(turboCheckbox).not.toBeChecked();
+    await expect.poll(() => property('--turbo-style')).toBe('');
+    await fs.writeFile(path.join(plusFolder, 'main.css'), 'body { --plus-style: second; }');
+    await expect.poll(() => property('--plus-style')).toBe('second');
+    await fs.writeFile(path.join(plusFolder, 'main.css'), 'body { --plus-style: incomplete');
+    await expect(addons.getByRole('alert')).toHaveText('The stylesheet could not be verified. The last applied version is still active.');
+    assert.equal(await property('--plus-style'), 'second');
+    await turboCheckbox.click();
+    await expect(turboCheckbox).toBeChecked();
+    await expect.poll(() => property('--turbo-style')).toBe('first');
+    await addons.getByText('Close', {exact: true}).click();
+
     const reopening = page.evaluate(bytes => window.vm.loadProject(new Uint8Array(bytes)).catch(() => {}), [...sb3]);
     await expect(review).toBeVisible();
     await review.getByText('Do not run', {exact: true}).click();

@@ -32,6 +32,7 @@ const {installMergePlanMcp} = require('../merge-plan-mcp-ipc');
 const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
 const {installLocalExtensionDevelopment} = require('../local-extension-development');
+const {installLocalEditorAddonDevelopment} = require('../local-editor-addon-development');
 const isTestRunWindow = details => details.frameName === 'tw-plus-test-run' && details.url === 'about:blank' && !details.postBody;
 const {installRepositoryCreation, loadCreationContract} = require('../local-git/repository-creation-ipc');
 const {createRepositoryCreationJournal} = require('../local-git/repository-creation-journal');
@@ -847,8 +848,31 @@ class EditorWindow extends ProjectRunningWindow {
           return result.response === 1;
         }
       });
+      installLocalEditorAddonDevelopment(this.ipc, this.window.webContents, {
+        chooseDirectory: async () => {
+          const ja = settings.locale?.startsWith('ja');
+          const result = await dialog.showOpenDialog(this.window, {
+            title: ja ? 'エディタアドオンの開発フォルダを選択' : 'Choose an editor add-on development folder',
+            properties: ['openDirectory']
+          });
+          return result.canceled ? null : result.filePaths[0];
+        },
+        confirm: async (directory, id) => {
+          const ja = settings.locale?.startsWith('ja');
+          const result = await dialog.showMessageBox(this.window, {
+            type: 'question',
+            message: ja ? 'エディタアドオンのスタイルを適用しますか？' : 'Apply the editor add-on styles?',
+            detail: ja ? `${id} のスタイルでエディターの表示を変更し、このフォルダでの変更を監視します。\n\n${directory}` :
+              `Styles from ${id} will change the editor interface and update when this folder changes.\n\n${directory}`,
+            buttons: ja ? ['キャンセル', '監視を開始'] : ['Cancel', 'Start Watching'],
+            defaultId: 0, cancelId: 0, noLink: true
+          });
+          return result.response === 1;
+        }
+      });
     } else {
       this.ipc.on('local-extension-development-enabled', event => { event.returnValue = false; });
+      this.ipc.on('local-editor-addon-enabled', event => { event.returnValue = false; });
     }
     if (gitEnabled) {
       installEditorGit(this.ipc, this.window.webContents, {

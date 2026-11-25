@@ -52,6 +52,13 @@ const localGit = {
 
 contextBridge.exposeInMainWorld('EditorPreload', {
   ...(ipcRenderer.sendSync('merge-plan-mcp-enabled') === true && {mergePlanShare}),
+  localEditorAddons: ipcRenderer.sendSync('local-editor-addon-enabled') === true ? {
+    list: () => ipcRenderer.invoke('local-editor-addon-list'),
+    start: () => ipcRenderer.invoke('local-editor-addon-start'),
+    setEnabled: (token, enabled) => ipcRenderer.invoke('local-editor-addon-set-enabled', token, enabled),
+    remove: token => ipcRenderer.invoke('local-editor-addon-remove', token),
+    onChange: listener => subscribe('local-editor-addon-change', listener)
+  } : null,
   localExtensions: ipcRenderer.sendSync('local-extension-development-enabled') === true ? {
     start: () => ipcRenderer.invoke('local-extension-start'),
     authorize: (session, id, sha256) => ipcRenderer.invoke('local-extension-authorize', session, id, sha256),
