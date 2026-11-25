@@ -8,6 +8,8 @@ const guiRequire = createRequire(path.join(process.env.E2E_GUI_ROOT, 'package.js
 const HtmlWebpackPlugin = guiRequire('html-webpack-plugin');
 const addons = path.join(process.env.TW_PLUS_DESKTOP_SOURCE, 'src-renderer-webpack/editor/addons');
 const gui = path.join(addons, '../gui');
+config.resolve.alias['./local-extension-authoring.js$'] =
+  createRequire(path.join(editor, 'package.json')).resolve('@kubohiroya/turbowarp-extension-loader/scratch-vm');
 config.resolve.alias['@tw-plus/pinned-backpack-window-host$'] =
   path.join(editor, 'scripts/desktop/open-backpack-window.ts');
 config.resolve.alias['@tw-plus/pinned-desktop-panel-host$'] =
@@ -34,6 +36,8 @@ const oldEntry = '<script src="index.js" onerror="webpackScriptError(event)"></s
 if (!template.includes(oldEntry)) throw new Error('Desktop addon settings template has changed');
 
 config.entry['desktop-addon-settings'] = path.join(addons, 'index.jsx');
+config.entry['test-frame'] = path.join(editor, 'site/test-run/frame.ts');
+config.plugins.push(new HtmlWebpackPlugin({chunks: ['test-frame'], filename: 'test-frame.html', title: 'Test'}));
 config.plugins.push(new HtmlWebpackPlugin({
   chunks: ['desktop-addon-settings'],
   filename: 'addons.html',

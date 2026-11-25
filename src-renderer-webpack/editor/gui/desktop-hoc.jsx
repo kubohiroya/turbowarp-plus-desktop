@@ -21,6 +21,7 @@ import {
 } from 'scratch-gui/src/reducers/tw';
 import {WrappedFileHandle} from './filesystem-api.js';
 import {setStrings} from '../prompt/prompt.js';
+import {connectLocalExtensionDevelopment} from './local-extension-development.js';
 
 // The locale provider remounts DesktopHOC within the same editor window.
 let mountedOnce = false;
@@ -78,6 +79,26 @@ const securityManager = {
 const USERNAME_KEY = 'tw:username';
 const DEFAULT_USERNAME = 'player';
 
+const developmentText = (locale) => locale.startsWith('ja') ? {
+  start: '拡張の開発フォルダを開く…', stop: '拡張の自動更新を停止',
+  LOCAL_EXTENSION_BUILD_REQUIRED: '開発フォルダに完成したビルドがありません。テンプレートでビルドしてから開いてください。',
+  LOCAL_EXTENSION_CONFLICT: '作品の同じIDの拡張は別のビルドです。開発フォルダの監視を停止しました。',
+  LOCAL_EXTENSION_INCOMPATIBLE: '拡張のIDまたはブロック定義が変わったため、前のビルドを維持しています。',
+  LOCAL_EXTENSION_BOUNDARY: '開発フォルダまたは成果物の参照先が変わったため、監視を停止しました。',
+  LOCAL_EXTENSION_APPLY_FAILED: '新しいビルドを反映できませんでした。前のビルドを維持しています。',
+  PROJECT_RECOVERY_REQUIRED: '拡張の更新後に作品を復旧できませんでした。監視を停止しました。',
+  LOCAL_EXTENSION_UNAVAILABLE: 'このEditorでは拡張の開発フォルダを開けません。'
+} : {
+  start: 'Open Extension Development Folder…', stop: 'Stop Extension Live Reload',
+  LOCAL_EXTENSION_BUILD_REQUIRED: 'Build the extension with the template before opening the development folder.',
+  LOCAL_EXTENSION_CONFLICT: 'The project already uses a different build of this extension. Watching stopped.',
+  LOCAL_EXTENSION_INCOMPATIBLE: 'The extension ID or block interface changed. The previous build is still active.',
+  LOCAL_EXTENSION_BOUNDARY: 'The development folder or an artifact changed location. Watching stopped.',
+  LOCAL_EXTENSION_APPLY_FAILED: 'The new build could not be applied. The previous build is still active.',
+  PROJECT_RECOVERY_REQUIRED: 'The project could not be restored after the update. Watching stopped.',
+  LOCAL_EXTENSION_UNAVAILABLE: 'Extension development folders are unavailable in this editor.'
+};
+
 const DesktopHOC = function (WrappedComponent) {
   class DesktopComponent extends React.Component {
     constructor (props) {
@@ -104,6 +125,11 @@ const DesktopHOC = function (WrappedComponent) {
       }
     }
     componentDidMount () {
+      if (EditorPreload.localExtensions) {
+        const text = developmentText(this.props.locale);
+        this.localExtensions = connectLocalExtensionDevelopment(this.props.vm, EditorPreload.localExtensions,
+          code => window.alert(text[code] ?? text.LOCAL_EXTENSION_UNAVAILABLE));
+      }
       EditorPreload.setExportForPackager(() => this.props.vm.saveProjectSb3('arraybuffer')
         .then((buffer) => ({
           name: this.state.title,
@@ -180,6 +206,7 @@ const DesktopHOC = function (WrappedComponent) {
       }
     }
     componentWillUnmount () {
+      this.localExtensions?.dispose();
       this.props.vm.runtime.off('RUNTIME_DISPOSED', this.handleRuntimeDisposed);
     }
     handleRuntimeDisposed () {
@@ -210,6 +237,7 @@ const DesktopHOC = function (WrappedComponent) {
         vm,
         ...props
       } = this.props;
+      const development = developmentText(locale);
       return (
         <WrappedComponent
           projectTitle={this.state.title}
@@ -218,6 +246,10 @@ const DesktopHOC = function (WrappedComponent) {
           onClickNewWindow={handleClickNewWindow}
           onClickPackager={handleClickPackager}
           onClickAbout={[
+            ...(EditorPreload.localExtensions ? [
+              {title: development.start, onClick: () => { void this.localExtensions?.start(); }},
+              {title: development.stop, onClick: () => { void this.localExtensions?.stop(); }}
+            ] : []),
             {
               title: this.messages['in-app-about.desktop-settings'],
               onClick: handleClickDesktopSettings

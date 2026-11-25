@@ -30,6 +30,10 @@ const mergePlanShare = {
     mergePlanReader = undefined;
     await ipcRenderer.invoke('merge-plan-mcp-stop', token);
   }
+const subscribe = (name, callback) => {
+  const listener = (_event, value) => callback(value);
+  ipcRenderer.on(name, listener);
+  return () => { ipcRenderer.removeListener(name, listener); };
 };
 
 const localGit = {
@@ -46,6 +50,13 @@ const localGit = {
 
 contextBridge.exposeInMainWorld('EditorPreload', {
   ...(ipcRenderer.sendSync('merge-plan-mcp-enabled') === true && {mergePlanShare}),
+  localExtensions: ipcRenderer.sendSync('local-extension-development-enabled') === true ? {
+    start: () => ipcRenderer.invoke('local-extension-start'),
+    authorize: (session, id, sha256) => ipcRenderer.invoke('local-extension-authorize', session, id, sha256),
+    stop: () => ipcRenderer.invoke('local-extension-stop'),
+    onBuild: callback => subscribe('local-extension-build', callback),
+    onStopped: callback => subscribe('local-extension-stopped', callback)
+  } : null,
   ...(ipcRenderer.sendSync('local-git-author-enabled') === true && {
     localGitAuthor: () => ipcRenderer.invoke('local-git-author')
   }),
