@@ -834,6 +834,8 @@ class EditorWindow extends ProjectRunningWindow {
           return result.response === 1;
         }
       });
+    } else {
+      this.ipc.on('local-extension-development-enabled', event => { event.returnValue = false; });
     }
     if (gitEnabled) {
       installEditorGit(this.ipc, this.window.webContents, {
