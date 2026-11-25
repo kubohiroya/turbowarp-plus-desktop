@@ -28,8 +28,7 @@ function DesktopSettingsMenu () {
   };
   const items = [
     {id: 'open-development-folder', label: menu.startLabel, onSelect: () => { void add(); }},
-    {id: 'stop-extension-reload', label: menu.stopLabel, onSelect: () => setOpen(true)},
-    ...menu.items
+    {id: 'stop-extension-reload', label: menu.stopLabel, onSelect: () => setOpen(true)}
   ];
   return <>
     <IconMenuButton label={menu.label} items={items} icon="⚙️" className={styles.settingsMenu} />

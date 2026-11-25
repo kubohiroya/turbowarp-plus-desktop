@@ -179,8 +179,7 @@ test('two independently watched extension folders update one Desktop project and
     };
     const menu = await openDesktopMenu();
     await expect(menu.getByRole('menuitem')).toHaveText([
-      'Open Extension Development Folder…', 'Stop Extension Live Reload', 'Desktop Settings',
-      'Privacy Policy', 'About', 'Source Code'
+      'Open Extension Development Folder…', 'Stop Extension Live Reload'
     ]);
     await menu.getByRole('menuitem', {name: 'Open Extension Development Folder…'}).click();
     const manager = page.getByRole('dialog', {name: 'Extension Development Folders'});

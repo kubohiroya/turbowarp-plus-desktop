@@ -245,17 +245,16 @@ const DesktopHOC = function (WrappedComponent) {
         ...props
       } = this.props;
       const development = developmentText(locale);
-      const desktopItems = [
-        {id: 'settings', label: this.messages['in-app-about.desktop-settings'], onSelect: handleClickDesktopSettings},
-        {id: 'privacy', label: this.messages['in-app-about.privacy'], onSelect: handleClickPrivacy},
-        {id: 'about', label: this.messages['in-app-about.about'], onSelect: handleClickAbout},
-        {id: 'source', label: this.messages['in-app-about.source-code'], onSelect: handleClickSourceCode}
+      const aboutItems = [
+        {title: this.messages['in-app-about.desktop-settings'], onClick: handleClickDesktopSettings},
+        {title: this.messages['in-app-about.privacy'], onClick: handleClickPrivacy},
+        {title: this.messages['in-app-about.about'], onClick: handleClickAbout},
+        {title: this.messages['in-app-about.source-code'], onClick: handleClickSourceCode}
       ];
       const menu = EditorPreload.localExtensions ? {
         label: development.menu,
         startLabel: development.start,
         stopLabel: development.stop,
-        items: desktopItems,
         development: {
           locale,
           sessions: this.state.developmentSessions,
@@ -277,7 +276,7 @@ const DesktopHOC = function (WrappedComponent) {
             onClickAddonSettings={handleClickAddonSettings}
             onClickNewWindow={handleClickNewWindow}
             onClickPackager={handleClickPackager}
-            onClickAbout={menu ? undefined : desktopItems.map(({label, onSelect}) => ({title: label, onClick: onSelect}))}
+            onClickAbout={menu ? undefined : aboutItems}
             onClickDesktopSettings={handleClickDesktopSettings}
             securityManager={securityManager}
             {...props}
