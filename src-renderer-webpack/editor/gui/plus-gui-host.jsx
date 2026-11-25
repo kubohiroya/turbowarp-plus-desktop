@@ -13,11 +13,28 @@ export const ProjectInfoMenu = undefined;
 function DesktopSettingsMenu () {
   const menu = React.useContext(DesktopSettingsMenuContext);
   const [open, setOpen] = React.useState(false);
+  const [adding, setAdding] = React.useState(false);
   if (!menu) return null;
-  const items = [{id: 'development-folders', label: menu.manageLabel, onSelect: () => setOpen(true)}, ...menu.items];
+
+  const add = async () => {
+    if (adding) return;
+    setOpen(true);
+    setAdding(true);
+    try {
+      await menu.development.onAdd();
+    } finally {
+      setAdding(false);
+    }
+  };
+  const items = [
+    {id: 'open-development-folder', label: menu.startLabel, onSelect: () => { void add(); }},
+    {id: 'stop-extension-reload', label: menu.stopLabel, onSelect: () => setOpen(true)},
+    ...menu.items
+  ];
   return <>
     <IconMenuButton label={menu.label} items={items} icon="⚙️" className={styles.settingsMenu} />
-    {open && <LocalExtensionDevelopmentDialog {...menu.development} onClose={() => setOpen(false)} />}
+    {open && <LocalExtensionDevelopmentDialog {...menu.development} adding={adding} onAdd={add}
+      onClose={() => { if (!adding) setOpen(false); }} />}
   </>;
 }
 

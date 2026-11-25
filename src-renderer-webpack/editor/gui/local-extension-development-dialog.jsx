@@ -37,13 +37,8 @@ function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove})
   </ExtensionRow>;
 }
 
-export function LocalExtensionDevelopmentDialog ({locale, sessions, error, errorText, onClose, onAdd, onToggle, onRemove}) {
+export function LocalExtensionDevelopmentDialog ({locale, sessions, error, errorText, adding, onClose, onAdd, onToggle, onRemove}) {
   const text = messages(locale);
-  const [adding, setAdding] = React.useState(false);
-  const add = () => {
-    setAdding(true);
-    void Promise.resolve(onAdd()).finally(() => setAdding(false));
-  };
   return <Modal contentLabel={text.title} className={reviewStyles.frame} onRequestClose={onClose}>
     <div className={`${reviewStyles.body} ${styles.developmentBody}`}>
       <div className={`twextsec-review ${styles.developmentReview}`}>
@@ -55,7 +50,7 @@ export function LocalExtensionDevelopmentDialog ({locale, sessions, error, error
           </ul>}
         </div>
         <div className={`twextsec-actions ${styles.developmentActions}`}>
-          <button type="button" onClick={add} disabled={adding}>{text.add}</button>
+          <button type="button" onClick={onAdd} disabled={adding}>{text.add}</button>
           <button type="button" onClick={onClose} disabled={adding}>{text.close}</button>
         </div>
       </div>

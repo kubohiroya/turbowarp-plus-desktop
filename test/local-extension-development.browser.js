@@ -171,15 +171,20 @@ test('two independently watched extension folders update one Desktop project and
     await expect(recorder).toBeVisible();
     assert.ok((await gear.boundingBox()).x >= (await recorder.boundingBox()).x + (await recorder.boundingBox()).width);
     await expect(gear).toContainText('⚙️');
-    const openManager = async () => {
+    const openDesktopMenu = async () => {
       await gear.click();
-      await expect(page.getByRole('menu', {name: 'Desktop menu'})).toHaveCSS('background-color', 'rgb(255, 255, 255)');
-      await page.getByRole('menuitem', {name: 'Extension Development Folders…'}).click();
+      const menu = page.getByRole('menu', {name: 'Desktop menu'});
+      await expect(menu).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+      return menu;
     };
-    await openManager();
+    const menu = await openDesktopMenu();
+    await expect(menu.getByRole('menuitem')).toHaveText([
+      'Open Extension Development Folder…', 'Stop Extension Live Reload', 'Desktop Settings',
+      'Privacy Policy', 'About', 'Source Code'
+    ]);
+    await menu.getByRole('menuitem', {name: 'Open Extension Development Folder…'}).click();
     const manager = page.getByRole('dialog', {name: 'Extension Development Folders'});
     const addFolder = manager.getByRole('button', {name: 'Add Development Folder…'});
-    await addFolder.click();
     await expect(manager.getByText('TurboWarp-Example-Extension', {exact: true})).toBeVisible();
     await addFolder.click();
     const firstRow = manager.locator('li').filter({hasText: faulty.id});
@@ -237,7 +242,9 @@ test('two independently watched extension folders update one Desktop project and
     assert.equal(await installed(), corrected.sha256);
     t.diagnostic(`same assertion ${assertId}: "Wrong, Scratch!" failed, "Hello, Scratch!" passed`);
 
-    await openManager();
+    await (await openDesktopMenu()).getByRole('menuitem', {name: 'Stop Extension Live Reload'}).click();
+    await expect(firstRow.getByRole('checkbox')).toBeChecked();
+    await expect(secondRow.getByRole('checkbox')).toBeChecked();
     await firstRow.getByRole('checkbox').uncheck();
     await expect(secondRow.getByRole('checkbox')).toBeChecked();
     const changedAgain = correctedSource.replace('Hello, {name}!', 'Hello again, {name}!');
