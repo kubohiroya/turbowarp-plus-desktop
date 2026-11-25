@@ -22,3 +22,5 @@
 共有と読み取りによって、作品フォルダやGitの状態は変更されません。「MCP共有を停止」で資格情報を無効にできます。ローカルGitパネルを閉じた場合、作品の切り替え、Desktopの再読み込みやウィンドウを閉じた場合も共有が終了します。
 
 切り戻す場合は `TW_PLUS_DESKTOP_MERGE_PLAN_MCP=0` でDesktopを再起動します。保存済みの候補はそのまま使えます。
+
+試遊結果をもとに修正案を返す場合は、`generationId` と `contentId` を記録した[修正候補JSON](https://github.com/kubohiroya/turbowarp-plus-editor-git/blob/main/README.ja.md#外部で修正したマージ候補を取り込む)を作り、エディタの **修正候補を取り込む** で選びます。競合で停止した場合は、`observation.stop.conflictId` を取り込みファイルの `resolves` に使えます。
