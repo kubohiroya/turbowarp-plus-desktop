@@ -8,6 +8,11 @@ const guiRequire = createRequire(path.join(process.env.E2E_GUI_ROOT, 'package.js
 const HtmlWebpackPlugin = guiRequire('html-webpack-plugin');
 const addons = path.join(process.env.TW_PLUS_DESKTOP_SOURCE, 'src-renderer-webpack/editor/addons');
 const gui = path.join(addons, '../gui');
+const editorHost = path.join(editor, 'site/gui-integration/index.ts');
+const hostProvider = config.plugins.find(plugin => plugin.definitions?.__TW_GUI_HOST__ === editorHost);
+if (!hostProvider) throw new Error('The pinned Editor GUI host connection has changed');
+hostProvider.definitions.__TW_GUI_HOST__ = path.join(gui, 'plus-gui-host.jsx');
+config.resolve.alias['@tw-plus/pinned-gui-host$'] = editorHost;
 config.resolve.alias['./local-extension-authoring.js$'] =
   createRequire(path.join(editor, 'package.json')).resolve('@kubohiroya/turbowarp-extension-loader/scratch-vm');
 config.resolve.alias['@tw-plus/pinned-backpack-window-host$'] =

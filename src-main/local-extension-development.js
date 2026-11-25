@@ -71,36 +71,49 @@ const readDevelopmentBuild = async ({root, identity}) => {
 };
 
 function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, confirm, intervalMs = 350}) {
-  let lease = null;
+  const leases = new Map();
   let opening = null;
   const trusted = event => event.sender === webContents && event.senderFrame === webContents.mainFrame &&
     event.senderFrame?.url?.split(/[?#]/u, 1)[0] === 'tw-editor://./plus-gui/gui.html';
+  const stop = session => {
+    clearTimeout(leases.get(session)?.timer);
+    leases.delete(session);
+  };
   const close = () => {
-    if (lease) clearTimeout(lease.timer);
-    lease = null;
+    for (const session of leases.keys()) stop(session);
     opening = null;
   };
+  const isCurrent = (current, generation) => leases.get(current.session) === current && current.generation === generation;
+  const pause = current => {
+    current.enabled = false;
+    current.generation++;
+    clearTimeout(current.timer);
+  };
+  const readCompatible = async current => {
+    const next = await readDevelopmentBuild(current.directory);
+    if (next.id !== current.id || next.apiSHA256 !== current.apiSHA256) throw failure('LOCAL_EXTENSION_INCOMPATIBLE');
+    return next;
+  };
   const schedule = current => {
-    if (lease !== current) return;
+    if (!current.enabled) return;
+    const {generation} = current;
+    if (!isCurrent(current, generation)) return;
     current.timer = setTimeout(async () => {
       try {
-        const next = await readDevelopmentBuild(current.directory);
-        if (lease !== current) return;
-        if (next.id !== current.id || next.apiSHA256 !== current.apiSHA256) {
-          throw failure('LOCAL_EXTENSION_INCOMPATIBLE');
-        }
+        const next = await readCompatible(current);
+        if (!isCurrent(current, generation)) return;
         if (next.sha256 !== current.sha256) {
           current.sha256 = next.sha256;
           webContents.send('local-extension-build', {...next, session: current.session});
         }
       } catch (error) {
-        if (lease === current && ['LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_INCOMPATIBLE'].includes(error.code)) {
-          close();
+        if (isCurrent(current, generation) && ['LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_INCOMPATIBLE'].includes(error.code)) {
+          pause(current);
           webContents.send('local-extension-stopped', {session: current.session, code: error.code});
         }
         // The producer writes the descriptor last. Ignore missing, unreadable or incomplete generations.
       } finally {
-        schedule(current);
+        if (isCurrent(current, generation)) schedule(current);
       }
     }, intervalMs);
     current.timer.unref();
@@ -111,7 +124,7 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     return operation(...args);
   });
   handle('start', async () => {
-    if (lease || opening) throw failure('LOCAL_EXTENSION_BUSY');
+    if (opening) throw failure('LOCAL_EXTENSION_BUSY');
     const ticket = {};
     opening = ticket;
     try {
@@ -119,19 +132,52 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
       if (!selected || opening !== ticket) return null;
       const selectedDirectory = await openDirectory(selected);
       const build = await readDevelopmentBuild(selectedDirectory);
-      if (opening !== ticket || !(await confirm(selectedDirectory.root, build.id)) || opening !== ticket) return null;
+      if (opening !== ticket) return null;
+      if (Array.from(leases.values()).some(current => current.id === build.id ||
+          sameFile(current.directory.identity, selectedDirectory.identity))) {
+        throw failure('LOCAL_EXTENSION_ALREADY_WATCHING');
+      }
+      if (!(await confirm(selectedDirectory.root, build.id)) || opening !== ticket) return null;
       const session = randomUUID();
-      lease = {directory: selectedDirectory, id: build.id, apiSHA256: build.apiSHA256, sha256: build.sha256, session};
-      schedule(lease);
-      return {...build, session};
+      const current = {directory: selectedDirectory, id: build.id, apiSHA256: build.apiSHA256,
+        sha256: build.sha256, session, enabled: true, generation: 0};
+      leases.set(session, current);
+      schedule(current);
+      return {...build, session, directory: selectedDirectory.root};
     } catch (error) {
-      throw failure(error.code === 'LOCAL_EXTENSION_BOUNDARY' ? error.code : 'LOCAL_EXTENSION_BUILD_REQUIRED');
+      if (['LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_ALREADY_WATCHING'].includes(error.code)) throw error;
+      throw failure('LOCAL_EXTENSION_BUILD_REQUIRED');
     } finally {
       if (opening === ticket) opening = null;
     }
   });
-  handle('authorize', (session, id, digest) => Boolean(lease && lease.session === session && lease.id === id && lease.sha256 === digest));
-  handle('stop', close);
+  handle('authorize', (session, id, digest) => {
+    const current = leases.get(session);
+    return Boolean(current?.enabled && current.id === id && current.sha256 === digest);
+  });
+  handle('set-enabled', async (session, enabled) => {
+    const current = leases.get(session);
+    if (!current || typeof enabled !== 'boolean') throw failure('LOCAL_EXTENSION_UNAVAILABLE');
+    if (!enabled) {
+      pause(current);
+      return null;
+    }
+    if (current.enabled) throw failure('LOCAL_EXTENSION_BUSY');
+    const generation = ++current.generation;
+    let build;
+    try {
+      build = await readCompatible(current);
+    } catch (error) {
+      if (['LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_INCOMPATIBLE'].includes(error.code)) throw error;
+      throw failure('LOCAL_EXTENSION_BUILD_REQUIRED');
+    }
+    if (!isCurrent(current, generation)) return null;
+    current.enabled = true;
+    current.sha256 = build.sha256;
+    schedule(current);
+    return {...build, session};
+  });
+  handle('stop', session => session === undefined ? close() : stop(session));
   webContents.on('did-start-navigation', details => {
     if (details.isMainFrame && !details.isSameDocument) close();
   });

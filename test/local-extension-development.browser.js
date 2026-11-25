@@ -17,7 +17,7 @@ const testName = 'the greeting includes the name';
 const assertId = 'check-development-greeting';
 const testHash = '7f6541ce906594cde7d02498c65e8a800f0c194a924d288f9de4d702e738d868';
 
-test('a rebuilt local TypeScript extension automatically changes the same Desktop Scratch test from red to green',
+test('two independently watched extension folders update one Desktop project and its Scratch test',
   {timeout: 60_000}, async t => {
     const editor = process.env.TW_PLUS_EDITOR_SOURCE;
     const template = process.env.TW_PLUS_EXTENSION_TEMPLATE_ROOT;
@@ -36,22 +36,28 @@ test('a rebuilt local TypeScript extension automatically changes the same Deskto
 
     const worktree = await fs.mkdtemp(path.join(tmpdir(), 'tw-local-extension-'));
     t.after(() => fs.rm(worktree, {recursive: true, force: true}));
-    const folder = path.join(worktree, 'extension');
-    await fs.mkdir(folder);
-    for (const name of ['src', 'assets', 'vite.config.ts', 'package.json']) {
-      await fs.cp(path.join(template, name), path.join(folder, name), {recursive: true});
+    const folder = path.join(worktree, 'greeting-extension');
+    const otherFolder = path.join(worktree, 'alternate-greeting-extension');
+    for (const directory of [folder, otherFolder]) {
+      await fs.mkdir(directory);
+      for (const name of ['src', 'assets', 'vite.config.ts', 'package.json']) {
+        await fs.cp(path.join(template, name), path.join(directory, name), {recursive: true});
+      }
+      await fs.symlink(path.join(template, 'node_modules'), path.join(directory, 'node_modules'), 'junction');
     }
-    await fs.symlink(path.join(template, 'node_modules'), path.join(folder, 'node_modules'), 'junction');
+    const metadataPath = path.join(otherFolder, 'src/extension-config.json');
+    const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
+    await fs.writeFile(metadataPath, JSON.stringify({...metadata, id: 'alternategreeting', name: 'Alternate Greeting'}));
     const sourcePath = path.join(folder, 'src/extension.ts');
     const correctedSource = await fs.readFile(sourcePath, 'utf8');
     const faultySource = correctedSource.replace('Hello, {name}!', 'Wrong, {name}!');
     assert.notEqual(faultySource, correctedSource);
-    const build = async source => {
-      await fs.writeFile(sourcePath, source);
-      await exec(process.execPath, [path.join(folder, 'node_modules/vite/bin/vite.js'), 'build'], {cwd: folder});
-      return readDevelopmentBuild(await openDirectory(folder));
+    const build = async (source, directory = folder) => {
+      await fs.writeFile(path.join(directory, 'src/extension.ts'), source);
+      await exec(process.execPath, [path.join(directory, 'node_modules/vite/bin/vite.js'), 'build'], {cwd: directory});
+      return readDevelopmentBuild(await openDirectory(directory));
     };
-    const faulty = await build(faultySource);
+    const [faulty, otherInitial] = await Promise.all([build(faultySource), build(faultySource, otherFolder)]);
     const testBytes = await fs.readFile(testBundle);
     assert.equal(createHash('sha256').update(testBytes).digest('hex'), testHash);
     const blocks = {
@@ -112,10 +118,11 @@ test('a rebuilt local TypeScript extension automatically changes the same Deskto
       if (!page.isClosed()) void page.evaluate(([name, payload]) => window.deliverDesktopIPC(name, payload),
         [channel, forTransport(value)]).catch(error => failures.push(error.message));
     };
-    let consent = 0;
+    const pickedFolders = [folder, otherFolder];
+    const consent = [];
     installLocalExtensionDevelopment({on() {}, handle: (channel, handler) => handlers.set(channel, handler)}, webContents, {
-      chooseDirectory: async () => folder,
-      confirm: async (_root, id) => { assert.equal(id, faulty.id); consent++; return true; }
+      chooseDirectory: async () => pickedFolders.shift(),
+      confirm: async (_root, id) => { consent.push(id); return true; }
     });
     t.after(() => webContents.emit('destroyed'));
     await page.exposeFunction('invokeDesktopIPC', async (name, ...args) => {
@@ -133,10 +140,13 @@ test('a rebuilt local TypeScript extension automatically changes the same Deskto
         isInitiallyFullscreen: () => false, getInitialFile: async () => null,
         setExportForPackager() {}, setChanged() {}, closedFile() {}, dropPermissions() {}, setIsFullScreen() {},
         getAdvancedCustomizations: async () => ({}), getPreferredMediaDevices: async () => ({}),
-        setLocale: () => ({strings: {'prompt.ok': 'OK', 'prompt.cancel': 'Cancel'}}),
+        setLocale: () => ({strings: {'prompt.ok': 'OK', 'prompt.cancel': 'Cancel',
+          'in-app-about.desktop-settings': 'Desktop Settings', 'in-app-about.privacy': 'Privacy Policy',
+          'in-app-about.about': 'About', 'in-app-about.source-code': 'Source Code'}}),
         localExtensions: {
           start: () => window.invokeDesktopIPC('local-extension-start'),
-          stop: () => window.invokeDesktopIPC('local-extension-stop'),
+          stop: (...args) => window.invokeDesktopIPC('local-extension-stop', ...args),
+          setEnabled: (...args) => window.invokeDesktopIPC('local-extension-set-enabled', ...args),
           authorize: (...args) => window.invokeDesktopIPC('local-extension-authorize', ...args),
           onBuild: listener => subscribe('local-extension-build', listener),
           onStopped: listener => subscribe('local-extension-stopped', listener)
@@ -156,36 +166,69 @@ test('a rebuilt local TypeScript extension automatically changes the same Deskto
       vm.runtime.getTargetForStage().variables.unsaved.value = 'unchanged';
       vm.emit('PROJECT_CHANGED');
     });
-    await page.locator('img[class*="about-icon"]').click();
-    await page.getByText('Open Extension Development Folder…', {exact: true}).click();
-    await expect.poll(() => consent).toBe(1);
+    const gear = page.getByRole('button', {name: 'Desktop menu', exact: true});
+    const recorder = page.locator('[data-addon-stage-control="mediarecorder"]');
+    await expect(recorder).toBeVisible();
+    assert.ok((await gear.boundingBox()).x >= (await recorder.boundingBox()).x + (await recorder.boundingBox()).width);
+    await expect(gear).toContainText('⚙️');
+    const openManager = async () => {
+      await gear.click();
+      await expect(page.getByRole('menu', {name: 'Desktop menu'})).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+      await page.getByRole('menuitem', {name: 'Extension Development Folders…'}).click();
+    };
+    await openManager();
+    const manager = page.getByRole('dialog', {name: 'Extension Development Folders'});
+    const addFolder = manager.getByRole('button', {name: 'Add Development Folder…'});
+    await addFolder.click();
+    await expect(manager.getByText('TurboWarp-Example-Extension', {exact: true})).toBeVisible();
+    await addFolder.click();
+    const firstRow = manager.locator('li').filter({hasText: faulty.id});
+    const secondRow = manager.locator('li').filter({hasText: otherInitial.id});
+    await expect(firstRow.getByRole('checkbox')).toBeChecked();
+    await expect(secondRow.getByRole('checkbox')).toBeChecked();
+    await expect(firstRow.locator('code')).toHaveText(await fs.realpath(folder));
+    await expect(secondRow.locator('code')).toHaveText(await fs.realpath(otherFolder));
+    assert.deepEqual(consent, [faulty.id, otherInitial.id]);
+    await manager.getByText('Close', {exact: true}).click();
 
-    const popup = page.waitForEvent('popup');
+    try {
+      await expect.poll(() => page.evaluate(id => vm.extensionManager.isExtensionLoaded(id), otherInitial.id)).toBe(true);
+    } catch (error) {
+      t.diagnostic(JSON.stringify({activity, alerts, failures, body: (await page.locator('body').innerText()).slice(0, 3500)}));
+      throw error;
+    }
     const runMenu = page.getByRole('button', {name: 'Run view opening options'});
     if (await runMenu.count()) await runMenu.click();
     else await page.getByRole('button', {name: 'Stage display options'}).click();
-    await page.getByText('Open the test run view', {exact: true}).click();
-    const view = await popup;
+    const [view] = await Promise.all([page.waitForEvent('popup', {timeout: 8000}),
+      page.getByText('Open the test run view', {exact: true}).click({timeout: 6000})]);
     const result = view.locator('.twpe-test-run__test').filter({hasText: testName});
     await view.getByRole('button', {name: 'Run all'}).click();
     await expect(result).toHaveAttribute('data-status', 'failed');
     await expect(result.locator('code')).toHaveText(['"Hello, Scratch!"', '"Wrong, Scratch!"']);
     await expect(result.getByRole('button', {name: 'Show block'})).toHaveAttribute('data-block-id', assertId);
 
-    const corrected = await build(correctedSource);
+    const [corrected, otherCorrected] = await Promise.all([build(correctedSource), build(correctedSource, otherFolder)]);
     assert.notEqual(faulty.sha256, corrected.sha256);
     assert.equal(faulty.apiSHA256, corrected.apiSHA256);
-    const installed = () => page.evaluate(id => JSON.parse(window.vm.toJSON(undefined, {allowOptimization: false}))
-      .turboWarpPlus.extensions.find(entry => entry.id === id)?.sha256, faulty.id);
+    const installed = (id = faulty.id) => page.evaluate(extensionId => {
+      try {
+        return JSON.parse(window.vm.toJSON(undefined, {allowOptimization: false}))
+          .turboWarpPlus.extensions.find(entry => entry.id === extensionId)?.sha256;
+      } catch (error) {
+        if (error.code !== 'PROJECT_BUSY') throw error;
+      }
+    }, id);
     try {
       await expect.poll(installed, {timeout: 10_000}).toBe(corrected.sha256);
+      await expect.poll(() => installed(otherInitial.id)).toBe(otherCorrected.sha256);
     } catch (error) {
       t.diagnostic(JSON.stringify(activity));
       t.diagnostic(await page.getByRole('dialog').allTextContents().then(values => values.join('\n')));
       throw error;
     }
     await expect(review).toHaveCount(0);
-    assert.equal(consent, 1);
+    assert.deepEqual(consent, [faulty.id, otherInitial.id]);
     assert.equal(await page.evaluate(() => window.vm.runtime.getTargetForStage().variables.unsaved.value), 'unchanged');
     await view.getByRole('button', {name: 'Run all'}).click();
     await expect(result).toHaveAttribute('data-status', 'passed');
@@ -194,11 +237,29 @@ test('a rebuilt local TypeScript extension automatically changes the same Deskto
     assert.equal(await installed(), corrected.sha256);
     t.diagnostic(`same assertion ${assertId}: "Wrong, Scratch!" failed, "Hello, Scratch!" passed`);
 
+    await openManager();
+    await firstRow.getByRole('checkbox').uncheck();
+    await expect(secondRow.getByRole('checkbox')).toBeChecked();
+    const changedAgain = correctedSource.replace('Hello, {name}!', 'Hello again, {name}!');
+    const [firstPaused, otherUpdated] = await Promise.all([build(changedAgain), build(changedAgain, otherFolder)]);
+    await expect.poll(() => installed(otherInitial.id)).toBe(otherUpdated.sha256);
+    assert.equal(await installed(), corrected.sha256);
+    await firstRow.getByRole('checkbox').click();
+    await expect(firstRow.getByRole('checkbox')).toBeChecked();
+    await expect.poll(() => installed()).toBe(firstPaused.sha256);
+
     const incompatible = await build(correctedSource.replace('opcode: block.opcode,', 'opcode: `${block.opcode}Changed`, '));
     assert.notEqual(incompatible.sha256, corrected.sha256);
     assert.equal(incompatible.apiSHA256, corrected.apiSHA256);
-    await expect.poll(() => alerts).toEqual(['The new build could not be applied. The previous build is still active.']);
-    assert.equal(await installed(), corrected.sha256);
-    assert.equal(consent, 1);
+    await expect(firstRow.getByRole('alert')).toHaveText('The new build could not be applied. The previous build is still active.');
+    assert.equal(await installed(), firstPaused.sha256);
+    await expect(secondRow.getByRole('checkbox')).toBeChecked();
+    assert.deepEqual(consent, [faulty.id, otherInitial.id]);
     t.diagnostic('an incompatible registered opcode was rejected, and the corrected build was restored');
+
+    await manager.getByText('Close', {exact: true}).click();
+    const reopening = page.evaluate(bytes => window.vm.loadProject(new Uint8Array(bytes)).catch(() => {}), [...sb3]);
+    await expect(review).toBeVisible();
+    await review.getByText('Do not run', {exact: true}).click();
+    await reopening;
   });

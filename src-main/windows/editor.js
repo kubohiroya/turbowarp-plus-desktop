@@ -829,7 +829,7 @@ class EditorWindow extends ProjectRunningWindow {
         chooseDirectory: async () => {
           const ja = settings.locale?.startsWith('ja');
           const result = await dialog.showOpenDialog(this.window, {
-            title: ja ? '拡張の開発フォルダを選択' : 'Choose an extension development folder',
+            title: ja ? '拡張ブロックの開発フォルダを選択' : 'Choose an extension development folder',
             properties: ['openDirectory']
           });
           return result.canceled ? null : result.filePaths[0];
@@ -838,8 +838,8 @@ class EditorWindow extends ProjectRunningWindow {
           const ja = settings.locale?.startsWith('ja');
           const result = await dialog.showMessageBox(this.window, {
             type: 'question',
-            message: ja ? '開発中の拡張を自動で更新しますか？' : 'Reload development builds automatically?',
-            detail: ja ? `拡張 ${id} をサンドボックスで実行します。次のフォルダで完成した互換ビルドが、この作品に自動で反映されます。\n\n${directory}` :
+            message: ja ? '開発中の拡張ブロックを自動で更新しますか？' : 'Reload development builds automatically?',
+            detail: ja ? `拡張ブロック ${id} をサンドボックスで実行します。次のフォルダで完成した互換ビルドが、この作品に自動で反映されます。\n\n${directory}` :
               `Extension ${id} runs in the sandbox. Compatible builds completed in this folder will update this project automatically.\n\n${directory}`,
             buttons: ja ? ['キャンセル', '監視を開始'] : ['Cancel', 'Start Watching'],
             defaultId: 0, cancelId: 0, noLink: true
