@@ -30,6 +30,8 @@ const {ExternalYamlFiles} = require('../external-yaml-files');
 const {createAgentStore, createAiAgents} = require('../ai-agents');
 const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
+const {installLocalExtensionDevelopment} = require('../local-extension-development');
+const isTestRunWindow = details => details.frameName === 'tw-plus-test-run' && details.url === 'about:blank' && !details.postBody;
 const {installRepositoryCreation, loadCreationContract} = require('../local-git/repository-creation-ipc');
 const {createRepositoryCreationJournal} = require('../local-git/repository-creation-journal');
 const {createPublicationJournal, loadPublicationContract, publicationCapabilities} = require('../local-git/publication');
@@ -804,6 +806,37 @@ class EditorWindow extends ProjectRunningWindow {
     });
 
     const editorURL = new URL(`tw-editor://./${rendererDirectory}/gui.html`);
+    if (plusRenderer) {
+      this.window.webContents.on('did-create-window', (window, details) => {
+        if (!isTestRunWindow(details)) return;
+        window.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
+        window.webContents.on('will-navigate', event => event.preventDefault());
+      });
+      installLocalExtensionDevelopment(this.ipc, this.window.webContents, {
+        chooseDirectory: async () => {
+          const ja = settings.locale?.startsWith('ja');
+          const result = await dialog.showOpenDialog(this.window, {
+            title: ja ? '拡張の開発フォルダを選択' : 'Choose an extension development folder',
+            properties: ['openDirectory']
+          });
+          return result.canceled ? null : result.filePaths[0];
+        },
+        confirm: async (directory, id) => {
+          const ja = settings.locale?.startsWith('ja');
+          const result = await dialog.showMessageBox(this.window, {
+            type: 'question',
+            message: ja ? '開発中の拡張を自動で更新しますか？' : 'Reload development builds automatically?',
+            detail: ja ? `拡張 ${id} をサンドボックスで実行します。次のフォルダで完成した互換ビルドが、この作品に自動で反映されます。\n\n${directory}` :
+              `Extension ${id} runs in the sandbox. Compatible builds completed in this folder will update this project automatically.\n\n${directory}`,
+            buttons: ja ? ['キャンセル', '監視を開始'] : ['Cancel', 'Start Watching'],
+            defaultId: 0, cancelId: 0, noLink: true
+          });
+          return result.response === 1;
+        }
+      });
+    } else {
+      this.ipc.on('local-extension-development-enabled', event => { event.returnValue = false; });
+    }
     if (gitEnabled) {
       installEditorGit(this.ipc, this.window.webContents, {
         clientId: gitClientId, store: gitStore, githubApi: gitGitHubApi, promptPersonalToken: gitTokenPrompt,
@@ -924,6 +957,10 @@ class EditorWindow extends ProjectRunningWindow {
   }
 
   handleWindowOpen (details) {
+    if (plusRenderer && isTestRunWindow(details) &&
+        this.window.webContents.getURL().split(/[?#]/u, 1)[0] === 'tw-editor://./plus-gui/gui.html') {
+      return {action: 'allow', outlivesOpener: false};
+    }
     if (isReservedPopout(details.frameName)) {
       return this.handleEditorPopout?.(details) ?? {action: 'deny'};
     }
