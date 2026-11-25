@@ -6,7 +6,7 @@ const {tmpdir} = require('node:os');
 const path = require('node:path');
 const {setTimeout: delay} = require('node:timers/promises');
 const {test} = require('node:test');
-const {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild} = require('../src-main/local-extension-development');
+const {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild, readDevelopmentFile} = require('../src-main/local-extension-development');
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const id = 'fixture';
@@ -44,6 +44,23 @@ test('a development snapshot rejects partial files and references outside the se
   await fs.unlink(files.bundle);
   await fs.symlink(other, files.bundle, 'file');
   await assert.rejects(readDevelopmentBuild(directory), {code: 'LOCAL_EXTENSION_BOUNDARY'});
+});
+
+test('retries an atomic artifact replacement after opening its previous inode', async t => {
+  const {files, publish} = await fixture(t);
+  await publish('first');
+  const bundle = await fs.realpath(files.bundle);
+  const next = bundle + '.tmp';
+  await fs.writeFile(next, 'second');
+  const open = fs.open.bind(fs);
+  const swap = t.mock.method(fs, 'open', async (name, ...args) => {
+    const handle = await open(name, ...args);
+    await fs.rename(next, name);
+    return handle;
+  });
+  await assert.rejects(readDevelopmentFile(bundle, 1024), {code: 'LOCAL_EXTENSION_INCOMPLETE'});
+  swap.mock.restore();
+  assert.equal((await readDevelopmentFile(bundle, 1024)).toString(), 'second');
 });
 
 test('watching requires the current Editor frame and grants only the active session and compatible generation',

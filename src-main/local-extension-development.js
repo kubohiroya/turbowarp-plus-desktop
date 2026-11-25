@@ -21,8 +21,9 @@ const readFile = async (name, limit) => {
   const handle = await fs.open(name, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
   try {
     const before = await handle.stat();
-    if (!before.isFile() || before.nlink !== 1) throw failure('LOCAL_EXTENSION_BOUNDARY');
-    if (!sameFile(stat, before)) throw failure('LOCAL_EXTENSION_INCOMPLETE');
+    if (!before.isFile() || before.nlink > 1) throw failure('LOCAL_EXTENSION_BOUNDARY');
+    // An atomic rename can unlink the open inode while a new build is being published.
+    if (before.nlink === 0 || !sameFile(stat, before)) throw failure('LOCAL_EXTENSION_INCOMPLETE');
     if (before.size < 1 || before.size > limit) throw failure('LOCAL_EXTENSION_INCOMPLETE');
     const bytes = Buffer.alloc(before.size);
     const {bytesRead} = await handle.read(bytes, 0, bytes.length, 0);
