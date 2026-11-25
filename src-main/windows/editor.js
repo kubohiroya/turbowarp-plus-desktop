@@ -32,7 +32,6 @@ const {installMergePlanMcp} = require('../merge-plan-mcp-ipc');
 const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
 const {installLocalExtensionDevelopment} = require('../local-extension-development');
-const {installLocalEditorAddonDevelopment} = require('../local-editor-addon-development');
 const isTestRunWindow = details => details.frameName === 'tw-plus-test-run' && details.url === 'about:blank' && !details.postBody;
 const {installRepositoryCreation, loadCreationContract} = require('../local-git/repository-creation-ipc');
 const {createRepositoryCreationJournal} = require('../local-git/repository-creation-journal');
@@ -848,6 +847,7 @@ class EditorWindow extends ProjectRunningWindow {
           return result.response === 1;
         }
       });
+      const {installLocalEditorAddonDevelopment} = require('../local-editor-addon-development');
       installLocalEditorAddonDevelopment(this.ipc, this.window.webContents, {
         chooseDirectory: async () => {
           const ja = settings.locale?.startsWith('ja');
