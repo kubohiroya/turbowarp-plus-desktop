@@ -31,7 +31,7 @@ const addonMessages = locale => locale.startsWith('ja') ? {
   formats: {turbowarp: 'TurboWarp format', plus: 'Plus Editor add-on package'}
 };
 
-function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove}) {
+function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove, renderSettings}) {
   const {name, description, descriptions, author, license, version} = session.metadata ?? parseExtensionMetadata(session.sourceHeader);
   return <ExtensionRow
     metadata={{name, description, descriptions, author, license, version}}
@@ -49,13 +49,14 @@ function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove})
     </div>}
   >
     {session.error && <p className="twextsec-failed" role="alert">{errorText(session.error)}</p>}
+    {renderSettings?.(session)}
     <div className="twextsec-actions">
       <button type="button" onClick={() => onRemove(session.token)} disabled={session.busy || session.removing}>{text.remove}</button>
     </div>
   </ExtensionRow>;
 }
 
-export function LocalExtensionDevelopmentDialog ({locale, sessions, error, errorText, adding, onClose, onAdd, onToggle, onRemove, kind}) {
+export function LocalExtensionDevelopmentDialog ({locale, sessions, error, errorText, adding, onClose, onAdd, onToggle, onRemove, kind, renderSettings}) {
   const text = {...messages(locale), ...(kind === 'addon' && addonMessages(locale))};
   return <Modal contentLabel={text.title} className={reviewStyles.frame} onRequestClose={onClose}>
     <div className={`${reviewStyles.body} ${styles.developmentBody}`}>
@@ -64,7 +65,7 @@ export function LocalExtensionDevelopmentDialog ({locale, sessions, error, error
           <p className="twextsec-intro">{text.intro}</p>
           {error && <p className="twextsec-failed" role="alert">{error}</p>}
           {sessions.length === 0 ? <p>{text.empty}</p> : <ul className="twextsec-rows">
-            {sessions.map(session => <DevelopmentRow key={session.token} {...{session, locale, text, errorText, onToggle, onRemove}} />)}
+            {sessions.map(session => <DevelopmentRow key={session.token} {...{session, locale, text, errorText, onToggle, onRemove, renderSettings}} />)}
           </ul>}
         </div>
         <div className={`twextsec-actions ${styles.developmentActions}`}>

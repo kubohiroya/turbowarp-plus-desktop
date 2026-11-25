@@ -26,10 +26,16 @@ function runAddonWorker () {
     panels.set(id, {label, text, actions: handlers});
   };
   const describe = entries => Array.from(entries, ([id, {label}]) => ({id, label}));
-  self.addEventListener('message', async ({data: {format, id, defaults, sources, startup, paintClipboard}}) => {
+  self.addEventListener('message', async ({data: {format, id, values, sources, startup, paintClipboard}}) => {
     try {
-      const api = Object.freeze({registerCommand, registerPanel});
-      const settings = new Map(defaults);
+      const currentSettings = new Map(values);
+      const settingEvents = new EventTarget();
+      const settings = Object.freeze({
+        get: key => currentSettings.get(key),
+        addEventListener: settingEvents.addEventListener.bind(settingEvents),
+        removeEventListener: settingEvents.removeEventListener.bind(settingEvents)
+      });
+      const api = Object.freeze({registerCommand, registerPanel, settings});
       const reduxEvents = new EventTarget();
       let paintEvents = false;
       let paintReply = null;
@@ -46,7 +52,7 @@ function runAddonWorker () {
       });
       const addon = Object.freeze({
         tab: Object.freeze({registerEditorCommand: registerCommand, registerEditorPanel: registerPanel, redux}),
-        settings: Object.freeze({get: key => settings.get(key)}),
+        settings,
         self: Object.freeze(Object.assign(new EventTarget(), {id, disabled: false, enabledLate: false}))
       });
       for (const source of sources) {
@@ -63,7 +69,12 @@ function runAddonWorker () {
         }
       }
       if (!commands.size && !panels.size && !paintEvents) throw new Error('No editor integration registered');
-      self.addEventListener('message', async ({data: {type, id, panel, request, action}}) => {
+      self.addEventListener('message', async ({data: {type, id, panel, request, action, values: updates}}) => {
+        if (type === 'settings') {
+          for (const [key, value] of updates) currentSettings.set(key, value);
+          settingEvents.dispatchEvent(new Event('change'));
+          return;
+        }
         if (type === 'paint' && paintEvents) {
           paintReply = {type: 'paint-result', request, clearOffset: false};
           reduxEvents.dispatchEvent(new CustomEvent('statechanged', {detail: {action: {type: action}}}));
@@ -129,11 +140,11 @@ function connect (event) {
     worker.addEventListener('error', fail);
     port.onmessage = ({data}) => {
       if (data.type === 'paint') pendingPaint = data.request;
-      else pending = data.request;
+      else if (data.type !== 'settings') pending = data.request;
       worker.postMessage(data);
     };
-    const {format, id, defaults, sources, startup, paintClipboard} = event.data;
-    worker.postMessage({format, id, defaults, sources, startup, paintClipboard});
+    const {format, id, values, sources, startup, paintClipboard} = event.data;
+    worker.postMessage({format, id, values, sources, startup, paintClipboard});
     window.addEventListener('pagehide', () => worker.terminate(), {once: true});
   } catch {
     port.postMessage({type: 'failed'});

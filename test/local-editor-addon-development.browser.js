@@ -10,7 +10,7 @@ const {installLocalEditorAddonDevelopment} = require('../src-main/local-editor-a
 const origin = 'http://localhost:41015';
 const prefix = '/plus-gui/';
 
-test('Desktop loads editor add-ons with live panels, workspace actions, startup and scoped Redux integration', {timeout: 45_000}, async t => {
+test('Desktop loads editor add-ons with live settings, workspace actions, startup and scoped Redux integration', {timeout: 45_000}, async t => {
   const editor = process.env.TW_PLUS_EDITOR_SOURCE;
   const gui = process.env.E2E_GUI_ROOT;
   assert.ok(editor && path.isAbsolute(editor), 'Set TW_PLUS_EDITOR_SOURCE to the pinned Editor checkout');
@@ -42,18 +42,33 @@ test('Desktop loads editor add-ons with live panels, workspace actions, startup 
   await Promise.all([
     fs.writeFile(path.join(turbo, 'addon.json'), JSON.stringify({
       name: 'Turbo commands', userscripts: [{url: 'command.js', matches: ['projects']}],
-      settings: [{id: 'stop-label', type: 'string', default: 'Stop from TurboWarp add-on'}]
+      settings: [
+        {id: 'stop-label', type: 'string', default: 'Stop from TurboWarp add-on'},
+        {id: 'announce', name: 'Show status', type: 'boolean', default: false, dynamic: true},
+        {id: 'tone', name: 'Status tone', type: 'select', default: 'short', dynamic: true,
+          potentialValues: [{id: 'short', name: 'Short'}, {id: 'full', name: 'Full'}]},
+        {id: 'passes', name: 'Passes per inspection', type: 'positive_integer', default: 1, max: 3}
+      ]
     })),
     fs.writeFile(path.join(turbo, 'command.js'), `export default ({addon}) => {
       addon.tab.registerEditorCommand('stop', addon.settings.get('stop-label'), () =>
         ({project: 'stop', workspace: 'zoom-in', label: 'Stopped from TurboWarp add-on'}));
+      let status;
+      const readSettings = () => {
+        const settings = addon.settings;
+        status = settings.get('announce') ? settings.get('tone') + ' status / ' + settings.get('passes') :
+          'TurboWarp panel ran its action';
+      };
+      readSettings();
+      addon.settings.addEventListener('change', readSettings);
       addon.tab.registerEditorPanel('turbo-tools', 'TurboWarp tools', {
-        actions: [{id: 'inspect', label: 'Inspect', run: () => ({text: 'TurboWarp panel ran its action'})}]
+        actions: [{id: 'inspect', label: 'Inspect', run: () => ({text: status})}]
       });
     };`),
     fs.writeFile(path.join(plus, 'package.json'), JSON.stringify({
       name: 'plus-commands', displayName: 'Plus commands',
-      turbowarpPlusEditor: {addon: {entry: 'command.mjs', permissions: ['workspace.viewport']}}
+      turbowarpPlusEditor: {addon: {entry: 'command.mjs', permissions: ['workspace.viewport'],
+        settings: [{id: 'detailed', name: 'Detailed status', type: 'boolean', default: false, dynamic: true}]}}
     })),
     fs.writeFile(path.join(startup, 'package.json'), JSON.stringify({
       name: 'startup-commands', displayName: 'Startup commands',
@@ -67,6 +82,7 @@ test('Desktop loads editor add-ons with live panels, workspace actions, startup 
     }))
   ]);
   const plusSource = `export function activate(api: {
+    settings: {get(key: string): unknown, addEventListener(type: 'change', handler: () => void): void}
     registerCommand(id: string, label: string,
       handler: () => Promise<{project?: 'run', label: string}>): void
     registerPanel(id: string, label: string, info: {
@@ -74,6 +90,10 @@ test('Desktop loads editor add-ons with live panels, workspace actions, startup 
       actions: {id: string, label: string, run: () => {text: string, workspace: 'zoom-in' | 'zoom-out'}}[]
     }): void
   }) {
+    let suffix;
+    const readPreference = () => { suffix = api.settings.get('detailed') ? ' / detailed' : ''; };
+    readPreference();
+    api.settings.addEventListener('change', readPreference);
     api.registerPanel('workspace', 'Workspace helper VERSION', {
       text: 'Panel build VERSION',
       actions: [{id: 'scale', label: 'Change zoom', run: () => ({
@@ -95,7 +115,7 @@ test('Desktop loads editor add-ons with live panels, workspace actions, startup 
         await import('${origin}${prefix}sandbox-probe.js');
         return {label: 'Unexpected external module'};
       } catch {}
-      return {label: 'Ran build VERSION #' + (++calls), EFFECT};
+      return {label: 'Ran build VERSION #' + (++calls) + suffix, EFFECT};
     });
   }`;
   const output = path.join(plus, 'command.mjs');
@@ -182,6 +202,7 @@ test('Desktop loads editor add-ons with live panels, workspace actions, startup 
         list: () => window.invokeAddonIPC('list'),
         start: () => window.invokeAddonIPC('start'),
         setEnabled: (...values) => window.invokeAddonIPC('set-enabled', ...values),
+        setSettings: (...values) => window.invokeAddonIPC('set-settings', ...values),
         remove: token => window.invokeAddonIPC('remove', token),
         prepared: (...values) => window.invokeAddonIPC('prepared', ...values),
         onChange: listener => subscribe('local-editor-addon-change', listener),
@@ -228,6 +249,16 @@ test('Desktop loads editor add-ons with live panels, workspace actions, startup 
   await expect(command('Ran build one #1')).toBeVisible();
   assert.deepEqual(await actions(), ['stopAll']);
 
+  await openFolders();
+  const plusSettingsRow = dialog.locator('li').filter({hasText: 'plus-commands'});
+  await plusSettingsRow.getByText('Add-on settings', {exact: true}).click();
+  await plusSettingsRow.getByRole('checkbox', {name: 'Detailed status'}).check();
+  await plusSettingsRow.getByRole('button', {name: 'Apply settings'}).click();
+  await expect(plusSettingsRow.getByRole('button', {name: 'Apply settings'})).toBeDisabled();
+  await dialog.getByText('Close', {exact: true}).click();
+  await command('Ran build one #1').click();
+  await expect(command('Ran build one #2 / detailed')).toBeVisible();
+
   await command('Workspace helper one').click();
   const firstPanel = page.getByRole('dialog', {name: 'Workspace helper one'});
   await expect(firstPanel.getByRole('status')).toHaveText('Panel build one');
@@ -245,7 +276,7 @@ test('Desktop loads editor add-ons with live panels, workspace actions, startup 
   await secondPanel.getByRole('button', {name: 'Close'}).click();
 
   await command('Run build two').click();
-  await expect(command('Ran build two #1')).toBeVisible();
+  await expect(command('Ran build two #1 / detailed')).toBeVisible();
   assert.deepEqual(await actions(), ['stopAll', 'greenFlag']);
   await expect(command('Stopped from TurboWarp add-on')).toBeVisible();
 
@@ -255,8 +286,8 @@ test('Desktop loads editor add-ons with live panels, workspace actions, startup 
   await openFolders();
   await expect(dialog.getByRole('alert')).toHaveText('JavaScript failed to start. Check the entry point and use of the add-on API.');
   await dialog.getByText('Close', {exact: true}).click();
-  await command('Ran build two #1').click();
-  await expect(command('Ran build two #2')).toBeVisible();
+  await command('Ran build two #1 / detailed').click();
+  await expect(command('Ran build two #2 / detailed')).toBeVisible();
   await expect(command('Workspace helper two')).toBeVisible();
   await expect(command('Invalid workspace panel')).toHaveCount(0);
 
@@ -264,13 +295,27 @@ test('Desktop loads editor add-ons with live panels, workspace actions, startup 
   await enabled.click();
   await expect(enabled).not.toBeChecked();
   await dialog.getByText('Close', {exact: true}).click();
-  await expect(command('Ran build two #2')).toHaveCount(0);
+  await expect(command('Ran build two #2 / detailed')).toHaveCount(0);
   await expect(command('Workspace helper two')).toHaveCount(0);
   await expect(command('Stopped from TurboWarp add-on')).toBeVisible();
   await command('TurboWarp tools').click();
   const turboPanel = page.getByRole('dialog', {name: 'TurboWarp tools'});
   await turboPanel.getByRole('button', {name: 'Inspect'}).click();
   await expect(turboPanel.getByRole('status')).toHaveText('TurboWarp panel ran its action');
+  await turboPanel.getByRole('button', {name: 'Close'}).click();
+
+  await openFolders();
+  const turboSettingsRow = dialog.locator('li').filter({hasText: 'turbo-commands'});
+  await turboSettingsRow.getByText('Add-on settings', {exact: true}).click();
+  await turboSettingsRow.getByRole('checkbox', {name: 'Show status'}).check();
+  await turboSettingsRow.getByRole('combobox', {name: 'Status tone'}).selectOption({label: 'Full'});
+  await turboSettingsRow.getByRole('spinbutton', {name: /Passes per inspection/}).fill('2');
+  await turboSettingsRow.getByRole('button', {name: 'Apply settings'}).click();
+  await expect(turboSettingsRow.getByRole('status').filter({hasText: 'reload the editor'})).toBeVisible();
+  await dialog.getByText('Close', {exact: true}).click();
+  await command('TurboWarp tools').click();
+  await turboPanel.getByRole('button', {name: 'Inspect'}).click();
+  await expect(turboPanel.getByRole('status')).toHaveText('full status / 1');
   await turboPanel.getByRole('button', {name: 'Close'}).click();
 
   await openFolders();
@@ -314,7 +359,8 @@ test('Desktop loads editor add-ons with live panels, workspace actions, startup 
     await expect(command('Stop from TurboWarp add-on')).toBeVisible();
     await expect.poll(() => startupOrder.at(-1)).toBe('project');
   };
-  const reloadNotice = dialog.getByRole('status').filter({hasText: 'reload the editor'});
+  const startupRow = dialog.locator('li').filter({hasText: 'startup-commands'});
+  const reloadNotice = startupRow.getByRole('status').filter({hasText: 'reload the editor'});
   await openFolders();
   await add.click();
   const startupCheckbox = dialog.getByRole('checkbox', {name: 'Startup commands'});
@@ -325,6 +371,10 @@ test('Desktop loads editor add-ons with live panels, workspace actions, startup 
   await reload();
   await expect(command('Startup version one')).toBeVisible();
   assert.deepEqual(startupOrder, ['addon', 'project']);
+  await command('TurboWarp tools').click();
+  await turboPanel.getByRole('button', {name: 'Inspect'}).click();
+  await expect(turboPanel.getByRole('status')).toHaveText('full status / 2');
+  await turboPanel.getByRole('button', {name: 'Close'}).click();
 
   await page.evaluate(() => {
     const stage = window.vm.runtime.getTargetForStage();
@@ -332,7 +382,6 @@ test('Desktop loads editor add-ons with live panels, workspace actions, startup 
     stage.variables.unsaved.value = 'keep this edit';
     window.vm.emit('PROJECT_CHANGED');
   });
-  const startupRow = dialog.locator('li').filter({hasText: 'startup-commands'});
   const activeBuild = startupRow.locator('code[title]');
   await openFolders();
   await expect(reloadNotice).toHaveCount(0);

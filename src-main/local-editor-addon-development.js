@@ -3,6 +3,7 @@ const path = require('node:path');
 const {createHash, randomUUID} = require('node:crypto');
 const {parse} = require('postcss');
 const {openDirectory, readDevelopmentFile} = require('./local-extension-development');
+const {readAddonSettings, settingValues, validSettingValue} = require('./local-editor-addon-settings');
 
 const cssPath = /^(?:[a-z\d_-][a-z\d_.-]*\/)*[a-z\d_-][a-z\d_.-]*\.css$/iu;
 const scriptPath = /^(?:[a-z\d_-][a-z\d_.-]*\/)*[a-z\d_-][a-z\d_.-]*\.m?js$/iu;
@@ -68,7 +69,7 @@ async function readEditorAddon (directory) {
   let styles;
   let scripts;
   let activation = 'live';
-  let defaults = [];
+  const settings = readAddonSettings(turbo ? manifest.settings : manifest.turbowarpPlusEditor?.addon?.settings);
   const permissions = manifest.turbowarpPlusEditor?.addon?.permissions ?? [];
   if (!Array.isArray(permissions) || permissions.some(permission =>
     permission !== 'workspace.viewport' && (!turbo || permission !== 'paint.clipboard-offset'))) {
@@ -86,11 +87,6 @@ async function readEditorAddon (directory) {
     styles = (manifest.userstyles ?? []).map(style => style.url);
     scripts = (manifest.userscripts ?? []).map(script => script.url);
     if (manifest.dynamicEnable === false || manifest.dynamicDisable === false) activation = 'startup';
-    if (Array.isArray(manifest.settings)) {
-      defaults = manifest.settings.filter(setting => typeof setting?.id === 'string' &&
-        /^[a-z\d_-]{1,80}$/iu.test(setting.id) &&
-        ['boolean', 'number', 'string'].includes(typeof setting.default)).map(setting => [setting.id, setting.default]);
-    }
   } else {
     const addon = manifest.turbowarpPlusEditor?.addon;
     if (!addon || (addon.activation !== undefined && !['live', 'startup'].includes(addon.activation)) ||
@@ -116,7 +112,8 @@ async function readEditorAddon (directory) {
   }
   const digest = createHash('sha256').update(JSON.stringify([decode(bytes), css, sources])).digest('hex');
   if ((paintClipboard || viewport) && !sources.length) return {...row, unavailable: 'LOCAL_ADDON_RUNTIME_UNSUPPORTED'};
-  return {...row, activation, defaults, css, sources, digest, paintClipboard, viewport};
+  const settingsRevision = createHash('sha256').update(JSON.stringify(settings)).digest('hex');
+  return {...row, activation, settings, settingsRevision, css, sources, digest, paintClipboard, viewport};
 }
 
 function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory, confirm, intervalMs = 500}) {
@@ -134,8 +131,13 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
     (session.enabled ? currentDigest(session) !== session.nextDigest : session.applied);
   const list = () => Array.from(sessions.values(), session => {
     const {token, directory, id, format, metadata, enabled, failure, unavailable, activation, removing} = session;
+    const build = session.settingsBuild;
+    const fields = build?.sources.length ? build.settings.filter(field => field.kind !== 'readonly') : [];
+    const settings = fields.map(field => ({...field, value: session.overrides.get(field.id) ?? field.default}));
+    const settingsPending = Boolean(session.runtimeId && settings.some(field => session.runningSettings.get(field.id) !== field.value));
     return {token, directory: directory.root, id, format, metadata, enabled, error: failure ?? unavailable, unavailable,
-      activation, removing, appliedDigest: currentDigest(session), reloadRequired: needsReload(session)};
+      activation, removing, appliedDigest: currentDigest(session), reloadRequired: needsReload(session) || settingsPending,
+      settings, settingsRevision: build?.settingsRevision};
   });
   const readFailure = cause => cause.code?.startsWith('LOCAL_ADDON_') ? cause.code : 'LOCAL_ADDON_INCOMPLETE';
   const publish = () => { if (!webContents.isDestroyed()) webContents.send('local-editor-addon-change', list()); };
@@ -148,7 +150,7 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
   const runtime = message => {
     if (!webContents.isDestroyed()) webContents.send('local-editor-addon-runtime', message);
   };
-  const prepare = (session, build, runtimeId, startup) => new Promise((resolve, reject) => {
+  const prepare = (session, build, runtimeId, startup, values) => new Promise((resolve, reject) => {
     const finish = success => {
       clearTimeout(timeout);
       waiting.delete(runtimeId);
@@ -158,15 +160,24 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
     const timeout = setTimeout(() => finish(false), 5000);
     waiting.set(runtimeId, finish);
     runtime({type: 'prepare', runtimeId, token: session.token, format: session.format, id: session.id,
-      defaults: build.defaults, sources: build.sources, startup: startup && build.activation === 'startup',
+      values: [...values], sources: build.sources, startup: startup && build.activation === 'startup',
       paintClipboard: build.paintClipboard, viewport: build.viewport});
   });
   const apply = async (session, build, epoch, startup = false) => {
     const runtimeId = build.sources.length ? randomUUID() : null;
     let key = null;
     let accepted = false;
+    const overrides = new Map(build.settings.filter(field => validSettingValue(field, session.overrides.get(field.id)))
+      .map(field => [field.id, session.overrides.get(field.id)]));
+    const values = settingValues(build.settings, overrides);
+    if (session.runtimeId && !startup) {
+      for (const field of build.settings) {
+        const previous = session.runningSettings.get(field.id);
+        if (!field.dynamic && validSettingValue(field, previous)) values.set(field.id, previous);
+      }
+    }
     try {
-      if (runtimeId) await prepare(session, build, runtimeId, startup);
+      if (runtimeId) await prepare(session, build, runtimeId, startup, values);
       if (!live(session, epoch)) return;
       if (build.css) key = await webContents.insertCSS(build.css, {cssOrigin: 'author'});
       if (!live(session, epoch)) return;
@@ -175,7 +186,7 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
       if (runtimeId) runtime({type: 'accept', runtimeId, token: session.token});
       else if (session.runtimeId) runtime({type: 'remove', token: session.token});
       Object.assign(session, {key, runtimeId, lastGood: build, nextDigest: build.digest,
-        metadata: build.metadata, applied: true, failure: null});
+        metadata: build.metadata, applied: true, failure: null, settingsBuild: build, overrides, runningSettings: values});
       accepted = true;
     } finally {
       if (!accepted && runtimeId) runtime({type: 'discard', runtimeId});
@@ -269,7 +280,7 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
         const session = {token: randomUUID(), directory, id, format, metadata, unavailable, activation,
           enabled: !unavailable, applied: false, nextDigest: build.digest ?? null,
           permitsScripts: Boolean(build.sources?.length), permitsPaintClipboard: build.paintClipboard,
-          permitsViewport: build.viewport};
+          permitsViewport: build.viewport, settingsBuild: unavailable ? null : build, overrides: new Map()};
         sessions.set(session.token, session);
         try {
           if (session.enabled && activation === 'live') await apply(session, build, epoch);
@@ -296,6 +307,36 @@ function installLocalEditorAddonDevelopment (ipc, webContents, {chooseDirectory,
         await unload(session);
       }
       if (live(session, epoch)) { session.enabled = enabled; publish(); schedule(); }
+    });
+  });
+  handle('set-settings', (token, revision, changes) => {
+    const epoch = generation;
+    return serial(() => {
+      const session = sessions.get(token);
+      if (!session || generation !== epoch || session.unavailable || session.removing) return;
+      const build = session.settingsBuild;
+      if (!build?.sources.length || revision !== build.settingsRevision) throw error('LOCAL_ADDON_SETTINGS_CHANGED');
+      const fields = new Map(build.settings.map(field => [field.id, field]));
+      if (!Array.isArray(changes) || changes.length > fields.size) throw error('LOCAL_ADDON_INVALID_SETTINGS');
+      const overrides = new Map(session.overrides);
+      const liveValues = [];
+      const seen = new Set();
+      for (const change of changes) {
+        if (!Array.isArray(change) || change.length !== 2) throw error('LOCAL_ADDON_INVALID_SETTINGS');
+        const [id, value] = change;
+        const field = fields.get(id);
+        if (!field || seen.has(id) || !validSettingValue(field, value)) throw error('LOCAL_ADDON_INVALID_SETTINGS');
+        seen.add(id);
+        if (value === field.default) overrides.delete(id);
+        else overrides.set(id, value);
+        if (field.dynamic && session.runtimeId && session.runningSettings.get(id) !== value) liveValues.push([id, value]);
+      }
+      session.overrides = overrides;
+      if (liveValues.length) {
+        for (const [id, value] of liveValues) session.runningSettings.set(id, value);
+        runtime({type: 'settings', token, runtimeId: session.runtimeId, values: liveValues});
+      }
+      publish();
     });
   });
   handle('remove', token => {

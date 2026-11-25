@@ -65,14 +65,14 @@ export function startEditorAddonRuntime (vm, host) {
     for (const key of staged.keys()) remove(staged, key);
     for (const key of active.keys()) remove(active, key);
   };
-  const prepare = ({runtimeId, token, format, id, defaults, sources, startup, paintClipboard, viewport}) => {
+  const prepare = ({runtimeId, token, format, id, values, sources, startup, paintClipboard, viewport}) => {
     const frame = document.createElement('iframe');
     frame.hidden = true;
     frame.title = 'Editor add-on runtime';
     frame.setAttribute('sandbox', 'allow-scripts');
     frame.src = new URL('editor-addon-runtime.html', document.baseURI).href;
     const {port1, port2} = new MessageChannel();
-    const build = {frame, port: port1, commands: null, buttons: [], invocation: null, paintEvents: false};
+    const build = {runtimeId, frame, port: port1, commands: null, buttons: [], invocation: null, paintEvents: false};
     staged.set(runtimeId, build);
 
     const prepared = success => {
@@ -116,7 +116,7 @@ export function startEditorAddonRuntime (vm, host) {
     };
     frame.addEventListener('load', () => {
       frame.contentWindow.postMessage(
-        {type: 'local-editor-addon-connect', format, id, defaults, sources, startup, paintClipboard}, '*', [port2]);
+        {type: 'local-editor-addon-connect', format, id, values, sources, startup, paintClipboard}, '*', [port2]);
     }, {once: true});
     document.body.appendChild(frame);
   };
@@ -192,6 +192,11 @@ export function startEditorAddonRuntime (vm, host) {
         if (nextPanel) showPanel(message.token, build, nextPanel);
         else closePanel();
       }
+      break;
+    }
+    case 'settings': {
+      const build = active.get(message.token);
+      if (build?.runtimeId === message.runtimeId) build.port.postMessage({type: 'settings', values: message.values});
       break;
     }
     case 'discard': remove(staged, message.runtimeId); break;

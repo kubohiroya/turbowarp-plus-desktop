@@ -180,6 +180,7 @@ test('two independently watched extension folders update one Desktop project and
           list: () => window.invokeDesktopIPC('local-editor-addon-list'),
           start: () => window.invokeDesktopIPC('local-editor-addon-start'),
           setEnabled: (...args) => window.invokeDesktopIPC('local-editor-addon-set-enabled', ...args),
+          setSettings: (...args) => window.invokeDesktopIPC('local-editor-addon-set-settings', ...args),
           remove: token => window.invokeDesktopIPC('local-editor-addon-remove', token),
           onChange: listener => subscribe('local-editor-addon-change', listener),
           onRuntime: listener => subscribe('local-editor-addon-runtime', listener),
