@@ -100,18 +100,27 @@ const readSnapshot = async ({root, identity}) => {
   return snapshot;
 };
 
-const buildFromSource = async (builder, source, signal) => {
+const buildFromSource = async (builder, directory, source, signal) => {
   const files = await builder.build(source, signal);
-  return readCompletedBuild((name, limit) => {
+  const snapshot = await readCompletedBuild((name, limit) => {
     const bytes = files.get(name);
     if (!bytes || bytes.length > limit) throw failure('LOCAL_EXTENSION_SOURCE_LIMIT');
     return bytes;
   });
+  // Compilation runs against an immutable snapshot, but the chosen folder can change while it runs.
+  // Publish only the output that still matches the current source generation.
+  signal.throwIfAborted();
+  const latest = await builder.read(directory, signal, readFile);
+  signal.throwIfAborted();
+  if (latest.id !== source.id) throw failure('LOCAL_EXTENSION_INCOMPATIBLE');
+  if (latest.digest !== source.digest) throw failure('LOCAL_EXTENSION_SOURCE_CHANGED');
+  return snapshot;
 };
 
 const sourceErrors = new Set([
   'LOCAL_EXTENSION_SOURCE_UNAVAILABLE', 'LOCAL_EXTENSION_SOURCE_LIMIT', 'LOCAL_EXTENSION_SOURCE_TIMEOUT',
-  'LOCAL_EXTENSION_SOURCE_FAILED', 'LOCAL_EXTENSION_SOURCE_CANCELLED', 'LOCAL_EXTENSION_SOURCE_BUSY'
+  'LOCAL_EXTENSION_SOURCE_FAILED', 'LOCAL_EXTENSION_SOURCE_CANCELLED', 'LOCAL_EXTENSION_SOURCE_BUSY',
+  'LOCAL_EXTENSION_SOURCE_CHANGED'
 ]);
 const sourceError = error => sourceErrors.has(error.code) ? error.code : 'LOCAL_EXTENSION_SOURCE_FAILED';
 
@@ -165,9 +174,10 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     if (source.digest === current.sourceDigest) return current.snapshot;
     let next;
     try {
-      next = await buildFromSource(sourceBuilder, source, signal);
+      next = await buildFromSource(sourceBuilder, current.directory, source, signal);
     } catch (error) {
-      if (!signal.aborted && error.code !== 'LOCAL_EXTENSION_SOURCE_BUSY') {
+      if (!signal.aborted && !['LOCAL_EXTENSION_SOURCE_BUSY', 'LOCAL_EXTENSION_SOURCE_CHANGED',
+        'LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_INCOMPATIBLE'].includes(error.code)) {
         current.failedSource = {digest: source.digest, code: sourceError(error)};
       }
       throw error;
@@ -196,7 +206,7 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
         }
       } catch (error) {
         if (!isCurrent(current, generation)) return;
-        if (error.code === 'LOCAL_EXTENSION_SOURCE_BUSY') return;
+        if (['LOCAL_EXTENSION_SOURCE_BUSY', 'LOCAL_EXTENSION_SOURCE_CHANGED'].includes(error.code)) return;
         if (['LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_INCOMPATIBLE'].includes(error.code)) {
           pause(current);
           webContents.send('local-extension-stopped', {session: current.session, code: error.code});
@@ -243,7 +253,7 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
         throw failure('LOCAL_EXTENSION_ALREADY_WATCHING');
       }
       if (!(await confirm(selectedDirectory.root, id, mode)) || opening !== ticket) return null;
-      if (source) snapshot = await buildFromSource(sourceBuilder, source, signal);
+      if (source) snapshot = await buildFromSource(sourceBuilder, selectedDirectory, source, signal);
       if (opening !== ticket) return null;
       const {build, diagnostic} = snapshot;
       if (build.id !== id) throw failure('LOCAL_EXTENSION_INCOMPATIBLE');

@@ -290,3 +290,98 @@ test('source consent precedes compilation and cancelling an addition revokes it'
   await invoke('set-enabled', result.session, false);
   assert.equal(invoke('authorize', result.session, result.id, result.sha256), false);
 });
+
+test('source mode never publishes a successful but superseded build', {timeout: 5000}, async t => {
+  const {readSourceSnapshot} = require('../src-main/standard-extension-source-build');
+  const root = await fs.mkdtemp(path.join(tmpdir(), 'tw-extension-source-generation-'));
+  t.after(() => fs.rm(root, {recursive: true, force: true}));
+  await fs.mkdir(path.join(root, 'src'));
+  const sourceFile = path.join(root, 'src/index.ts');
+  const writeSource = label => fs.writeFile(sourceFile, `export const value = '${label}';`);
+  await Promise.all([
+    fs.writeFile(path.join(root, 'extension-build.json'), JSON.stringify({settings: 'src/settings.json'})),
+    fs.writeFile(path.join(root, 'package.json'), '{}'),
+    fs.writeFile(path.join(root, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'"),
+    fs.writeFile(path.join(root, 'src/settings.json'), JSON.stringify({id, unsandboxed: false})),
+    writeSource('first')
+  ]);
+
+  const contents = new EventEmitter();
+  contents.mainFrame = {url: 'tw-editor://./plus-gui/gui.html'};
+  contents.send = (...args) => contents.emit(...args);
+  const handlers = new Map();
+  const updates = [];
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => {
+    clearInterval(keepAlive);
+    contents.emit('destroyed');
+  });
+  let approvalCount = 0;
+  let blockedLabel;
+  let release;
+  const bundle = label => `fixture output for ${label}`;
+  installLocalExtensionDevelopment({on() {}, handle: (name, handler) => handlers.set(name, handler)}, contents, {
+    chooseDirectory: async () => root,
+    confirm: async () => { approvalCount++; return true; },
+    sourceBuilder: {
+      read: readSourceSnapshot,
+      build: async ({files}) => {
+        // No extension code executes in this fixture. The mock returns valid, hash-linked output.
+        const label = /'([^']+)'/u.exec(files.get('src/index.ts').toString())[1];
+        if (label === blockedLabel) {
+          await new Promise(resolve => {
+            release = resolve;
+            contents.emit('compiler-blocked');
+          });
+        }
+        return new Map([
+          ['fixture.js', Buffer.from(bundle(label))],
+          ['extension-manifest.json', Buffer.from(api)],
+          ['extension-development.json', Buffer.from(JSON.stringify({
+            formatVersion: 1, id,
+            bundle: {file: 'fixture.js', sha256: sha256(bundle(label))},
+            api: {file: 'extension-manifest.json', sha256: sha256(api)}
+          }))]
+        ]);
+      }
+    },
+    intervalMs: 15
+  });
+  contents.on('local-extension-build', build => updates.push(build.sha256));
+  const event = {sender: contents, senderFrame: contents.mainFrame};
+  const invoke = (name, ...args) => handlers.get('local-extension-' + name)(event, ...args);
+
+  // Initial add must not create a lease for a build superseded while compilation ran.
+  blockedLabel = 'first';
+  const firstCompile = once(contents, 'compiler-blocked');
+  const initial = invoke('start', 'source');
+  await firstCompile;
+  await writeSource('second');
+  release();
+  await assert.rejects(initial, {code: 'LOCAL_EXTENSION_SOURCE_CHANGED'});
+  const current = await invoke('start', 'source');
+  assert.equal(current.sha256, sha256(bundle('second')));
+  const authorize = (label) => invoke('authorize', current.session, id, sha256(bundle(label)));
+
+  // In an existing lease, the old working hash remains authorized until a fresh build is ready.
+  blockedLabel = 'third';
+  const thirdCompile = once(contents, 'compiler-blocked');
+  await writeSource('third');
+  await thirdCompile;
+  await writeSource('fourth');
+  blockedLabel = 'fourth';
+  const fourthCompile = once(contents, 'compiler-blocked');
+  release();
+  await fourthCompile;
+  assert.deepEqual(updates, []);
+  assert.equal(authorize('third'), false);
+  assert.equal(authorize('second'), true);
+  const updated = once(contents, 'local-extension-build');
+  release();
+  const [next] = await updated;
+  assert.equal(next.session, current.session);
+  assert.deepEqual(updates, [sha256(bundle('fourth'))]);
+  assert.equal(authorize('fourth'), true);
+  assert.equal(authorize('second'), false);
+  assert.equal(approvalCount, 2);
+});
