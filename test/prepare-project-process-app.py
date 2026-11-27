@@ -33,6 +33,7 @@ paths = (
     "src-main/standard-renderer-save.js", "src-main/workspace-project-key.js", "src-main/windows/editor-popouts.js",
     "src-main/ai-agents.js", "src-main/local-extension-development.js",
     "src-main/standard-extension-source-build.js",
+    "src-main/standard-extension-payload.js",
     "src-main/merge-plan-mcp-ipc.js", "src-main/merge-plan-mcp.js",
     "src-preload/editor.js",
 )

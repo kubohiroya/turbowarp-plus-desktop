@@ -253,6 +253,8 @@ test('source consent precedes compilation and cancelling an addition revokes it'
   const handlers = new Map();
   let approval = false;
   let waitForCancel = false;
+  const receipt = {formatVersion: 1, source: {kind: 'local-snapshot'}};
+  const measurements = {inputBytes: 10, outputBytes: 20};
   installLocalExtensionDevelopment({on() {}, handle: (name, handler) => handlers.set(name, handler)}, contents, {
     chooseDirectory: async () => root,
     confirm: async (_root, extensionId, mode) => {
@@ -262,14 +264,14 @@ test('source consent precedes compilation and cancelling an addition revokes it'
     },
     sourceBuilder: {
       read: async () => ({id, digest: 'first'}),
-      build: async (_snapshot, signal) => {
+      buildResult: async (_snapshot, signal) => {
         assert.ok(approval);
         if (waitForCancel) {
           contents.emit('build-started');
           await once(signal, 'abort');
           assert.ok(signal.aborted);
         }
-        return compiled;
+        return {files: compiled, receipt, measurements, environment: {mustNotBeForwarded: true}};
       }
     }
   });
@@ -286,6 +288,9 @@ test('source consent precedes compilation and cancelling an addition revokes it'
   assert.equal(await cancelled, null);
   waitForCancel = false;
   const result = await invoke('start', 'source');
+  assert.deepEqual(result.buildReceipt, receipt);
+  assert.deepEqual(result.measurements, measurements);
+  assert.equal(result.environment, undefined);
   assert.equal(invoke('authorize', result.session, result.id, result.sha256), true);
   await invoke('set-enabled', result.session, false);
   assert.equal(invoke('authorize', result.session, result.id, result.sha256), false);

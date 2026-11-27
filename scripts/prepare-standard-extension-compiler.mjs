@@ -1,21 +1,21 @@
-import {cp, mkdir, readFile, rm} from 'node:fs/promises';
-import {existsSync} from 'node:fs';
+import {cp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
+import {existsSync, realpathSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Arch} from 'electron-builder';
+import payloadTools from '../src-main/standard-extension-payload.js';
 
 const desktop = path.resolve(import.meta.dirname, '..');
 const toolchain = '@kubohiroya/sb3-toolchain';
 const manifest = '@kubohiroya/turbowarp-extension-manifest';
-const entry = 'dist/standard-extension-build.js';
 
 function packageDirectory (name, from) {
   const resolve = createRequire(path.join(from, 'package.json')).resolve;
   const location = resolve.paths(name).map(dir => path.join(dir, name))
     .find(dir => existsSync(path.join(dir, 'package.json')));
   if (!location) throw new Error('Missing installed compiler package ' + name);
-  return location;
+  return realpathSync(location);
 }
 
 async function prepare (arch) {
@@ -25,6 +25,15 @@ async function prepare (arch) {
   const packageJSON = async dir => JSON.parse(await readFile(path.join(dir, 'package.json'), 'utf8'));
   const config = await packageJSON(root);
   const desktopConfig = await packageJSON(desktop);
+  const dependencyLock = JSON.parse(await readFile(path.join(desktop, 'package-lock.json'), 'utf8'));
+  const packages = {};
+  const record = (name, version) => {
+    const entries = Object.entries(dependencyLock.packages).filter(([file, entry]) =>
+      file.endsWith('node_modules/' + name) && entry.version === version).map(([, entry]) => entry);
+    const integrities = new Set(entries.map(entry => entry.integrity));
+    if (integrities.size !== 1 || !/^sha512-[A-Za-z0-9+/]{86}==$/u.test(entries[0]?.integrity)) throw new Error('Missing pinned compiler integrity for ' + name);
+    packages[name] = {version, integrity: entries[0].integrity};
+  };
   if (config.version !== desktopConfig.devDependencies[toolchain]) throw new Error('Compiler pin differs from the install');
 
   await rm(target, {recursive: true, force: true});
@@ -38,6 +47,7 @@ async function prepare (arch) {
     }
     if (installed.has(name)) return;
     installed.set(name, pkg.version);
+    record(name, pkg.version);
     await mkdir(path.dirname(path.join(modules, name)), {recursive: true});
     await cp(directory, path.join(modules, name), {
       recursive: true, filter: file => file === directory || !path.relative(directory, file).split(path.sep).includes('node_modules')
@@ -47,11 +57,18 @@ async function prepare (arch) {
   try {
     const localToolchain = path.join(modules, toolchain);
     await mkdir(path.join(localToolchain, 'dist'), {recursive: true});
-    for (const file of ['package.json', 'LICENSE', entry]) await cp(path.join(root, file), path.join(localToolchain, file));
+    record(toolchain, config.version);
+    for (const file of ['package.json', 'LICENSE', 'dist']) await cp(path.join(root, file), path.join(localToolchain, file), {recursive: true});
     await install(manifest, root, config.dependencies[manifest]);
+    if (config.dependencies['@noble/hashes']) await install('@noble/hashes', root, config.dependencies['@noble/hashes']);
     await install('rolldown', root, config.dependencies.rolldown);
     await install('@rolldown/binding-darwin-' + arch, packageDirectory('rolldown', root), config.dependencies.rolldown);
     await cp(path.join(desktop, 'src-main/standard-extension-worker.mjs'), path.join(target, 'worker.mjs'));
+    const observed = payloadTools.inspectPayload(target);
+    await writeFile(path.join(target, 'compiler-lock.json'), JSON.stringify({
+      formatVersion: 1, recipe: 'turbowarp-standard-worker-v1', platform: 'darwin', arch,
+      electronVersion: dependencyLock.packages['node_modules/electron'].version, packages, ...observed
+    }) + '\n');
   } catch (error) {
     await rm(target, {recursive: true, force: true});
     throw error;

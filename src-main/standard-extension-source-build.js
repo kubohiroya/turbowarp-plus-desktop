@@ -1,8 +1,9 @@
-const {spawn} = require('node:child_process');
+const {execFile, spawn} = require('node:child_process');
 const {createHash} = require('node:crypto');
 const {existsSync, realpathSync} = require('node:fs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const {verifyPayload, verifyBuildReceipt} = require('./standard-extension-payload');
 
 const MiB = 1024 * 1024;
 const maximumParallelBuilds = 2;
@@ -77,14 +78,19 @@ const policy = `(version 1)
   (require-not (require-any
     (literal "/")
     (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom")
-    (subpath "/System") (subpath "/usr/lib") (subpath "/private/var/db/dyld")
+    (subpath "/System/Library") (subpath "/usr/lib") (subpath "/private/var/db/dyld")
     (subpath (param "FRAMEWORKS")) (literal (param "INFO"))
     (literal (param "RUNTIME")) (subpath (param "COMPILER")))))`;
 
 function runSourceWorker ({executable, appRoot, worker}, request, signal,
-  {timeoutMs = 15_000, outputLimit = 9 * MiB} = {}) {
+  {timeoutMs = 15_000, outputLimit = 9 * MiB, residentLimit = 256 * MiB, sampleMs = 100} = {}) {
   if (signal.aborted) return Promise.reject(cancelled());
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000 ||
+      !Number.isSafeInteger(outputLimit) || outputLimit < 1 || outputLimit > 9 * MiB ||
+      !Number.isSafeInteger(residentLimit) || residentLimit < MiB || residentLimit > 512 * MiB ||
+      !Number.isSafeInteger(sampleMs) || sampleMs < 10 || sampleMs > 1000 || request.length > 6 * MiB) return Promise.reject(limit());
   return new Promise((resolve, reject) => {
+    const started = performance.now();
     const child = spawn('/usr/bin/sandbox-exec', [
       '-D', `FRAMEWORKS=${appRoot}/Frameworks`, '-D', `INFO=${appRoot}/Info.plist`, '-D', `RUNTIME=${executable}`,
       '-D', `COMPILER=${path.dirname(worker)}`, '-p', policy,
@@ -93,6 +99,10 @@ function runSourceWorker ({executable, appRoot, worker}, request, signal,
       stdio: ['pipe', 'pipe', 'ignore']});
     let failureCode;
     let bytes = 0;
+    let closed = false;
+    let sampling = false;
+    let failedSamples = 0;
+    let sampledPeakResidentBytes = 0;
     const chunks = [];
     const kill = code => {
       failureCode ??= code;
@@ -101,7 +111,27 @@ function runSourceWorker ({executable, appRoot, worker}, request, signal,
     const abort = () => kill('LOCAL_EXTENSION_SOURCE_CANCELLED');
     signal.addEventListener('abort', abort, {once: true});
     const timer = setTimeout(() => kill('LOCAL_EXTENSION_SOURCE_TIMEOUT'), timeoutMs);
+    const sample = () => {
+      if (closed || sampling || failureCode || !child.pid) return;
+      sampling = true;
+      execFile('/bin/ps', ['-o', 'rss=', '-p', String(child.pid)], {env: {LC_ALL: 'C'}, timeout: 1000, maxBuffer: 1024}, (error, stdout) => {
+        sampling = false;
+        if (closed || child.exitCode !== null || failureCode) return;
+        const resident = Number(stdout.trim()) * 1024;
+        if (error || !Number.isSafeInteger(resident) || resident <= 0) {
+          // An exiting process can disappear from ps before Node receives its exit notification.
+          if (++failedSamples >= 3) kill('LOCAL_EXTENSION_SOURCE_UNAVAILABLE');
+          return;
+        }
+        failedSamples = 0;
+        sampledPeakResidentBytes = Math.max(sampledPeakResidentBytes, resident);
+        if (resident > residentLimit) kill('LOCAL_EXTENSION_SOURCE_LIMIT');
+      });
+    };
+    const memoryTimer = setInterval(sample, sampleMs);
+    sample();
     child.on('error', () => kill('LOCAL_EXTENSION_SOURCE_UNAVAILABLE'));
+    if (signal.aborted) abort();
     child.stdout.on('data', chunk => {
       if (failureCode) return;
       bytes += chunk.length;
@@ -110,18 +140,35 @@ function runSourceWorker ({executable, appRoot, worker}, request, signal,
     });
     child.stdin.on('error', () => {});
     child.on('close', code => {
+      closed = true;
       clearTimeout(timer);
+      clearInterval(memoryTimer);
       signal.removeEventListener('abort', abort);
       if (failureCode || code !== 0) {
-        reject(failure(failureCode ?? (code === 2 ? 'LOCAL_EXTENSION_SOURCE_FAILED' : 'LOCAL_EXTENSION_SOURCE_UNAVAILABLE')));
+        const error = failure(failureCode ?? (code === 2 ? 'LOCAL_EXTENSION_SOURCE_FAILED' : 'LOCAL_EXTENSION_SOURCE_UNAVAILABLE'));
+        if (!failureCode && code === 2) {
+          try {
+            const response = JSON.parse(Buffer.concat(chunks, bytes));
+            error.diagnostics = validateDiagnostics(response.diagnostics);
+          } catch { /* A malformed worker error remains a generic failure. */ }
+        }
+        reject(error);
         return;
       }
       try {
         const output = JSON.parse(Buffer.concat(chunks, bytes));
-        if (!Array.isArray(output) || output.length !== 4) throw new Error();
-        const files = new Map(output.map(([name, data]) => [name, Buffer.from(data, 'base64')]));
+        if (output.formatVersion !== 1 || !Array.isArray(output.files) || output.files.length !== 4) throw new Error();
+        const files = new Map(output.files.map(([name, data]) => {
+          if (typeof name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name) ||
+              typeof data !== 'string' || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(data)) throw new Error();
+          const bytes = Buffer.from(data, 'base64');
+          if (bytes.toString('base64') !== data) throw new Error();
+          return [name, bytes];
+        }));
         if (files.size !== 4) throw new Error();
-        resolve(files);
+        resolve({files, receipt: output.receipt, environment: output.environment,
+          measurements: {outputBytes: [...files.values()].reduce((sum, data) => sum + data.length, 0),
+            sampledPeakResidentBytes, elapsedMs: Math.ceil(performance.now() - started), cacheBytes: 0, temporaryDiskBytes: 0}});
       } catch {
         reject(failure('LOCAL_EXTENSION_SOURCE_FAILED'));
       }
@@ -130,29 +177,49 @@ function runSourceWorker ({executable, appRoot, worker}, request, signal,
   });
 }
 
+function validateDiagnostics (value) {
+  if (!Array.isArray(value) || value.length > 16) return [];
+  return value.filter(item => item && typeof item.file === 'string' &&
+    sourceName.test(item.file) &&
+    /^[A-Z_]{1,64}$/u.test(item.code) && Number.isSafeInteger(item.line) && item.line > 0 &&
+    Number.isSafeInteger(item.column) && item.column > 0).map(({code, file, line, column}) => ({code, file, line, column}));
+}
+
 function createStandardExtensionBuilder ({isPackaged, executable = process.execPath,
   resources = process.resourcesPath, platform = process.platform, mas = process.mas}) {
   if (platform !== 'darwin' || mas || !existsSync('/usr/bin/sandbox-exec')) return null;
-  const payload = isPackaged ? path.join(resources, 'standard-extension-compiler') :
+  const payload = isPackaged ? path.join(resources, 'standard-extension-compiler', process.arch) :
     path.resolve(__dirname, '../dist-standard-extension-compiler', process.arch);
   let worker;
   let appRoot;
+  let payloadLock;
   try {
     worker = realpathSync(path.join(payload, 'worker.mjs'));
     executable = realpathSync(executable);
     appRoot = path.resolve(executable, '../..');
     if (path.basename(appRoot) !== 'Contents') return null;
+    payloadLock = verifyPayload(payload);
   } catch {
     return null;
   }
   return {
     read: readSourceSnapshot,
     async build (snapshot, signal) {
+      return (await this.buildResult(snapshot, signal)).files;
+    },
+    async buildResult (snapshot, signal) {
       if (activeBuilds >= maximumParallelBuilds) throw failure('LOCAL_EXTENSION_SOURCE_BUSY');
       activeBuilds++;
       try {
+        const currentLock = verifyPayload(payload);
+        if (currentLock.sha256 !== payloadLock.sha256) throw failure('LOCAL_EXTENSION_SOURCE_UNAVAILABLE');
         const request = JSON.stringify(Array.from(snapshot.files, ([name, data]) => [name, data.toString('base64')]));
-        return await runSourceWorker({executable, appRoot, worker}, request, signal);
+        const result = await runSourceWorker({executable, appRoot, worker}, request, signal);
+        if (result.environment?.electron !== payloadLock.electronVersion || result.environment?.platform !== 'darwin' || result.environment?.arch !== process.arch) throw failure('LOCAL_EXTENSION_SOURCE_UNAVAILABLE');
+        const receipt = verifyBuildReceipt(result.receipt, result.files, snapshot, payloadLock);
+        return {...result, receipt, measurements: {...result.measurements,
+          inputBytes: [...snapshot.files.values()].reduce((sum, data) => sum + data.length, 0),
+          payloadBytes: payloadLock.bytes, additionalRuntimeDownloadBytes: 0}};
       } finally {
         activeBuilds--;
       }
@@ -160,4 +227,4 @@ function createStandardExtensionBuilder ({isPackaged, executable = process.execP
   };
 }
 
-module.exports = {createStandardExtensionBuilder, readSourceSnapshot, runSourceWorker};
+module.exports = {createStandardExtensionBuilder, readSourceSnapshot, runSourceWorker, validateDiagnostics};
