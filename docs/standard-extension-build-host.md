@@ -38,9 +38,9 @@ worker に渡すのは相対ファイル名と内容の snapshot。選択フォ�
 
 receipt は snapshot、lockfile、compiler の版と integrity、全出力 hash を実バイト列と再照合する。ローカル入力は `local-snapshot`、取得 broker から受けた GitHub snapshot は repository／commit を保持する。出所の観測記録であり、実行承認や開発セッションの権限を含まない。
 
-ローカル開発の開始結果・更新候補には `buildReceipt` と `measurements` を添える。実行環境の詳細は renderer へそのまま転送しない。source の世代が変わった場合は receipt を含む候補全体を破棄し、最後の正常版を保持する。
+ローカル開発の開始結果・更新候補には `buildReceipt` と `measurements` を添える。実行環境の詳細は renderer へそのまま転送しない。source の世代が変わった場合は receipt を含む候補全体を破棄し、最後の正常版を保持する。renderer は既知の非負整数の計測値だけを採用し、作品への正常適用後に表示を更新する。同一出力へ変換される新しい source 世代も計測値を通知するが、同じ JS は再適用しない。
 
-構文エラーは `{code, file, line, column}` の診断だけを返す。file は `src/` 内の相対名、line／column は 1 始まり。絶対パス・compiler message・source snippet を IPC に流さない。監視中の失敗通知は同じエラーコードでも位置が変われば再送し、再ビルドを省略する失敗 cache でも診断を保持する。UI における診断の追加表示は利用側の対応が必要。
+構文エラーは `{code, file, line, column}` の診断だけを返す。file は `src/` 内の相対名、line／column は 1 始まり。絶対パス・compiler message・source snippet を IPC に流さない。監視中の失敗通知は同じエラーコードでも位置が変われば再送し、再ビルドを省略する失敗 cache でも診断を保持する。開発フォルダ一覧は監視中の診断を表示し、成功・停止で消す。初回追加・再開の失敗を返す既存の invoke では、診断の詳細を転送しない。
 
 計測値は入力、出力、展開済み payload、追加 Node 取得、観測 RSS、時間、job の cache と一時ファイル内容。圧縮したインストーラーの増分と OS の filesystem cache は含まない。現在の compiler は同梱であり、必要時取得サービスや cache 削除 UI はこの変更の対象に含まない。
 
@@ -57,6 +57,16 @@ receipt は snapshot、lockfile、compiler の版と integrity、全出力 hash 
 
 通常の unit test は `node --test test/local-extension-development.test.js test/local-extension-source-build.test.js`。native の境界・compiler テストも実行する場合は、`TW_PLUS_SOURCE_BUILD_ELECTRON` に信頼する Electron の実行ファイル、`TW_PLUS_SOURCE_BUILD_RESOURCES` に今回の compiler を含む Resources を指定する。package の afterPack はこの組合せを検証する既存の経路を使用する。
 
+フィードバック表示の差分は `node --test test/local-extension-development.test.js test/local-extension-feedback.test.js` で検証する。host の同一出力の世代通知、renderer の診断更新・失敗時の計測維持・再適用抑止、日英の component markup と単位表示を対象にする。renderer のテストは固定の Loader adapter と React の静的描画を使うため、新しい renderer 全体の browser 統合や新規 DMG の検証とは区別する。
+
+### フィードバック表示の受け入れ基準と依存
+
+- 対象 Issue は Desktop #67、依存は PR #79。作業ブランチは `feat/extensions/source-build-feedback`。PR #79 の `687ac32` を base とする直列の差分。
+- 監視中の構文エラー位置とコードを表示し、変化した座標を反映する。成功・停止で古い診断を消し、実行時エラーと区別する。
+- 初回成功・再ビルドの計測値を表示する。同一出力でも新しい source 世代の値を通知し、JS の再適用は行わない。
+- 適用失敗で前回の値を失わない。共有 compiler を各拡張の追加容量として合算しない。計測していない値を 0 として表示しない。
+- 切り戻しはこのフィードバック差分を revert し、PR #79 の build receipt・計測 API と正常成果物を保持する。source build 自体の停止方法は従来どおり。
+
 Toolchain の取得と共有保存契約の横断検証は次のコマンドで再現する。Toolchain は #109 を含む信頼する checkout からビルドしたものを用いる。未信頼の拡張ソースをこの変数へ指定しない。
 
 ```sh
@@ -68,6 +78,6 @@ node scripts/verify-standard-extension-host.mjs
 
 ## 統合前の残条件と切り戻し
 
-この差分の公開・CI・新しい macOS 配布物での afterPack 検証は、ローカルの受け入れ結果と区別する。Toolchain #103 は open のままとし、対応を宣言する環境と元の DoD を照合して完了判定する。Desktop #67 の GitHub 取得 UI／限定 IPC、必要時取得、容量表示と cache 管理、他環境の実行境界は引き続き別の差分で進める。
+この差分の公開・CI・新しい macOS 配布物での afterPack 検証は、ローカルの受け入れ結果と区別する。Toolchain #103 は open のままとし、対応を宣言する環境と元の DoD を照合して完了判定する。Desktop #67 の GitHub 取得 UI／限定 IPC、必要時取得、初回・複数拡張・削除時の容量表と cache 管理、他環境の実行境界は引き続き別の差分で進める。今回の計測表示だけで、これらを完了としない。
 
 切り戻しは `TW_PLUS_DESKTOP_EXTENSION_SOURCE_BUILD=0` で source build の接続を停止する。完成成果物の監視、元ソース、作品、適用済みの JS と出所記録を保持する。compiler を更新する場合は worker・payload lock・architecture 別の配布物を同じ世代に揃え、未知の receipt 版や破損した payload で続行しない。

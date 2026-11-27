@@ -390,3 +390,33 @@ test('source mode never publishes a successful but superseded build', {timeout: 
   assert.equal(authorize('second'), false);
   assert.equal(approvalCount, 2);
 });
+
+test('source rebuilds publish fresh measurements even when output bytes are unchanged', {timeout: 5000}, async t => {
+  const {root, publish, files} = await fixture(t);
+  await publish('unchanged output');
+  const compiled = new Map(await Promise.all([
+    ['fixture.js', files.bundle], ['extension-manifest.json', files.api], ['extension-development.json', files.marker]
+  ].map(async ([name, file]) => [name, await fs.readFile(file)])));
+  const contents = new EventEmitter();
+  contents.mainFrame = {url: 'tw-editor://./plus-gui/gui.html'};
+  contents.send = (...args) => contents.emit(...args);
+  const handlers = new Map();
+  let generation = 1;
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => { clearInterval(keepAlive); contents.emit('destroyed'); });
+  installLocalExtensionDevelopment({on() {}, handle: (name, handler) => handlers.set(name, handler)}, contents, {
+    chooseDirectory: async () => root, confirm: async () => true, intervalMs: 10,
+    sourceBuilder: {
+      read: async () => ({id, digest: String(generation)}),
+      buildResult: async () => ({files: compiled, receipt: {formatVersion: 1}, measurements: {inputBytes: generation * 100}})
+    }
+  });
+  const event = {sender: contents, senderFrame: contents.mainFrame};
+  const first = await handlers.get('local-extension-start')(event, 'source');
+  const update = once(contents, 'local-extension-build');
+  generation = 2;
+  const [next] = await update;
+  assert.equal(next.sha256, first.sha256);
+  assert.deepEqual(next.measurements, {inputBytes: 200});
+  assert.equal(handlers.get('local-extension-authorize')(event, next.session, id, next.sha256), true);
+});

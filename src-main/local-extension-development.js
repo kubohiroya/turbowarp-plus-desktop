@@ -203,12 +203,14 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     if (!isCurrent(current, generation)) return;
     current.timer = setTimeout(async () => {
       try {
+        const previousSourceDigest = current.sourceDigest;
         const snapshot = await readCompatible(current);
         const {build: next, diagnostic} = snapshot;
         if (!isCurrent(current, generation)) return;
         current.missed = false;
         publishArtifacts(current, false);
-        if (next.sha256 !== current.sha256 || next.sourceMapSHA256 !== current.sourceMapSHA256) {
+        if (next.sha256 !== current.sha256 || next.sourceMapSHA256 !== current.sourceMapSHA256 ||
+            previousSourceDigest !== current.sourceDigest) {
           Object.assign(current, {sha256: next.sha256, sourceMapSHA256: next.sourceMapSHA256, diagnostic});
           webContents.send('local-extension-build', {...next, session: current.session});
         }

@@ -15,6 +15,12 @@ Template v0.13.0 以降の `pnpm dev` で作った拡張を作品から実行し
 
 編集中に完了した古いビルドは反映せず、監視中は未変更の最新ソースからビルドできるまで最後に適用した版を保持します。フォルダの初回追加中にソースが変わった場合は追加を確定しません。編集後に追加し直してください。内蔵ビルドは GitHub のソース取得ではなくローカルフォルダ向けです。Web 版や内蔵コンパイラーを持たない Desktop では、この操作は表示されません。通常の拡張の利用と外部ビルド成果物の監視に内蔵コンパイラーは不要です。
 
+監視中に内蔵コンパイラーが構文エラーを検出すると、一覧に `src/index.ts:2:4 (PARSE_ERROR)` のような相対ファイル名・行・列とコードを表示します。ソース本文や compiler の生のメッセージは表示しません。修正してビルドが成功すると、この診断を消します。作品から実行した際のエラー位置は別に表示します。初回追加・再開の失敗は、従来どおりエラーコードによる説明です。
+
+ソースビルドの各行にある「前回の正常ビルドの計測値」を開くと、共有ビルドツール、追加実行環境の取得、入力・出力、ビルドの cache・一時ファイル、観測した最大メモリー使用量と時間を確認できます。共有ビルドツールは拡張ごとの追加容量ではありません。値がない項目は表示しません。観測したメモリーはサンプリング値で、実際の最大値や OS の上限を保証しません。
+
+表示は最後に作品へ正常適用できた候補に対応します。ビルド・適用の失敗では前回の値を保ちます。ソース変更後の出力が同一でも計測値は更新し、同じ JS を作品へ再適用しません。これは既存の同梱ツール環境の計測表示であり、必要時取得や cache 削除を提供する操作ではありません。
+
 ## ヘッドレス検証
 
 実行環境、compiler payload の照合、receipt・診断・容量の契約と検証範囲は [標準拡張ビルドの実行ホスト](standard-extension-build-host.md) を参照してください。
@@ -22,7 +28,7 @@ Template v0.13.0 以降の `pnpm dev` で作った拡張を作品から実行し
 固定 Editor のチェックアウトで `npm ci` を実行し、`npm run webpack:plus -- <Editorの固定チェックアウト> <GUIの固定チェックアウト>` で Desktop 用レンダラーを作ります。テストには Template v0.12.0 以降のチェックアウトを使います。
 
 ```sh
-node --test test/local-extension-development.test.js
+node --test test/local-extension-development.test.js test/local-extension-feedback.test.js
 TW_PLUS_EDITOR_SOURCE=/absolute/path/to/editor \
 TW_PLUS_EXTENSION_TEMPLATE_ROOT=/absolute/path/to/extension-template \
 TW_PLUS_TEST_EXTENSION_JS=/absolute/path/to/turbowarp-test.js \
