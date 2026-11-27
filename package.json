@@ -136,12 +136,8 @@
     "mac": {
       "extraResources": [
         {
-          "from": "dist-standard-extension-compiler/${arch}/worker.mjs",
-          "to": "standard-extension-compiler/worker.mjs"
-        },
-        {
-          "from": "dist-standard-extension-compiler/${arch}/node_modules",
-          "to": "standard-extension-compiler/node_modules"
+          "from": "dist-standard-extension-compiler/${arch}",
+          "to": "standard-extension-compiler/${arch}"
         }
       ],
       "artifactName": "${productName}-Setup-${version}.${ext}",

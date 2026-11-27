@@ -101,7 +101,8 @@ const readSnapshot = async ({root, identity}) => {
 };
 
 const buildFromSource = async (builder, directory, source, signal) => {
-  const files = await builder.build(source, signal);
+  const result = builder.buildResult ? await builder.buildResult(source, signal) : {files: await builder.build(source, signal)};
+  const {files} = result;
   const snapshot = await readCompletedBuild((name, limit) => {
     const bytes = files.get(name);
     if (!bytes || bytes.length > limit) throw failure('LOCAL_EXTENSION_SOURCE_LIMIT');
@@ -114,6 +115,10 @@ const buildFromSource = async (builder, directory, source, signal) => {
   signal.throwIfAborted();
   if (latest.id !== source.id) throw failure('LOCAL_EXTENSION_INCOMPATIBLE');
   if (latest.digest !== source.digest) throw failure('LOCAL_EXTENSION_SOURCE_CHANGED');
+  if (result.receipt) {
+    snapshot.build.buildReceipt = result.receipt;
+    snapshot.build.measurements = result.measurements;
+  }
   return snapshot;
 };
 
@@ -145,11 +150,14 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     opening = null;
   };
   const isCurrent = (current, generation) => leases.get(current.session) === current && current.generation === generation;
-  const publishArtifacts = (current, waiting, code) => {
-    if (current.waiting === waiting && current.buildError === code) return;
+  const publishArtifacts = (current, waiting, code, diagnostics) => {
+    const diagnosticKey = JSON.stringify(diagnostics ?? []);
+    if (current.waiting === waiting && current.buildError === code && current.buildDiagnosticKey === diagnosticKey) return;
     current.waiting = waiting;
     current.buildError = code;
-    webContents.send('local-extension-artifacts', {session: current.session, waiting, ...(code && {code})});
+    current.buildDiagnosticKey = diagnosticKey;
+    webContents.send('local-extension-artifacts', {session: current.session, waiting, ...(code && {code}),
+      ...(diagnostics?.length && {diagnostics})});
   };
   const pause = current => {
     current.enabled = false;
@@ -170,7 +178,7 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     const {signal} = current.controller;
     const source = await sourceBuilder.read(current.directory, signal, readFile);
     if (source.id !== current.id) throw failure('LOCAL_EXTENSION_INCOMPATIBLE');
-    if (source.digest === current.failedSource?.digest) throw failure(current.failedSource.code);
+    if (source.digest === current.failedSource?.digest) throw Object.assign(failure(current.failedSource.code), {diagnostics: current.failedSource.diagnostics});
     if (source.digest === current.sourceDigest) return current.snapshot;
     let next;
     try {
@@ -178,7 +186,7 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
     } catch (error) {
       if (!signal.aborted && !['LOCAL_EXTENSION_SOURCE_BUSY', 'LOCAL_EXTENSION_SOURCE_CHANGED',
         'LOCAL_EXTENSION_BOUNDARY', 'LOCAL_EXTENSION_INCOMPATIBLE'].includes(error.code)) {
-        current.failedSource = {digest: source.digest, code: sourceError(error)};
+        current.failedSource = {digest: source.digest, code: sourceError(error), diagnostics: error.diagnostics};
       }
       throw error;
     }
@@ -211,7 +219,7 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
           pause(current);
           webContents.send('local-extension-stopped', {session: current.session, code: error.code});
         } else if (current.mode === 'source') {
-          publishArtifacts(current, false, sourceError(error));
+          publishArtifacts(current, false, sourceError(error), error.diagnostics);
         } else if (current.missed) {
           // The producer may be publishing files. Report a gap only after two failed reads.
           publishArtifacts(current, true);

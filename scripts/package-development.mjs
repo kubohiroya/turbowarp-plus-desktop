@@ -60,7 +60,7 @@ const builtFiles = await build({
       const resources = packager.getResourcesDir(appOutDir);
       const archive = path.join(resources, 'app.asar');
       if (target === 'dmg') {
-        const compiler = path.join(resources, 'standard-extension-compiler');
+        const compiler = path.join(resources, 'standard-extension-compiler', arch);
         const dependency = name => path.join(compiler, 'node_modules', name);
         const toolchain = dependency('@kubohiroya/sb3-toolchain');
         const binding = dependency('@rolldown/binding-darwin-' + arch);
