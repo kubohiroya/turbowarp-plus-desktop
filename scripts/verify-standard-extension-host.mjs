@@ -22,8 +22,8 @@ const builder = createStandardExtensionBuilder({isPackaged: true, executable, re
 if (!builder) throw new Error('No verified build host');
 const {signal} = new AbortController();
 const source = await resolveGitHubExtensionSnapshot('https://github.com/kubohiroya/turbowarp-extension-template', {
-  ref: 'v0.13.0',
-  expectedCommit: 'b4cd60ecf9f2a3094dc446bf1b99dabaeb89517a',
+  ref: 'v0.13.2',
+  expectedCommit: '13ff059a303963e583ca1d7a7f06ca158d05ae71',
   signal,
 });
 const first = await builder.buildResult(source, signal);
@@ -62,12 +62,12 @@ try {
   const local = await builder.buildResult({files: source.files}, signal);
   if (local.receipt.source.kind !== 'local-snapshot') throw new Error('Local source identity');
   const reference = JSON.parse(
-    await readFile(path.join(toolchain, 'docs/evidence/issue-103-source-build.json'), 'utf8'),
+    await readFile(path.join(toolchain, 'docs/evidence/issue-103-template-0.13.2-pipeline.json'), 'utf8'),
   );
   if (JSON.stringify(reference.receipt.outputs) !== JSON.stringify(first.receipt.outputs))
     throw new Error('Different Node and Electron output hashes');
   const evidence = {
-    toolchainReference: 'sb3-toolchain PR #109 / fb92d158cbf5d762590e4c6118d732ebed695bec',
+    toolchainReference: '@kubohiroya/sb3-toolchain@0.31.3 / 473bcdbf8fbf2e39b6103cf75a8ba1949593bfa7',
     matchesNodeReference: true,
     at: new Date().toISOString(),
     host: {platform: process.platform, arch: process.arch, node: process.versions.node},
@@ -80,6 +80,7 @@ try {
     sb3Roundtrip: true,
     localSnapshot: true,
   };
+  await mkdir('dist', {recursive: true});
   await writeFile('dist/source-build-evidence.json', JSON.stringify(evidence, null, 2) + '\n');
   console.log(JSON.stringify(evidence, null, 2));
 } finally {

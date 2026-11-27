@@ -50,6 +50,14 @@ test('receipt normalization binds input, lock, compiler and all actual output by
   assert.throws(() => verifyBuildReceipt(raw, files, {...snapshot, source: {...origin, token: 'private'}}, payload),
     {code: 'LOCAL_EXTENSION_SOURCE_UNAVAILABLE'});
   assert.equal(normalized.compiler.integrity, payload.packages.rolldown.integrity);
+  const versioned = {...raw, formatVersion: 1, source: {kind: 'local-snapshot'},
+    compiler: {...raw.compiler, integrity: payload.packages.rolldown.integrity}};
+  assert.deepEqual(verifyBuildReceipt(versioned, files, snapshot, payload), normalized);
+  assert.deepEqual(verifyBuildReceipt(versioned, files, {...snapshot, source: origin}, payload).source, origin);
+  for (const changed of [{...versioned, compiler: {...versioned.compiler, integrity: 'sha512-wrong'}},
+    {...versioned, source: origin}]) {
+    assert.throws(() => verifyBuildReceipt(changed, files, snapshot, payload), {code: 'LOCAL_EXTENSION_SOURCE_UNAVAILABLE'});
+  }
   for (const changed of [{...raw, formatVersion: 9}, {...raw, token: 'must not persist'},
     {...raw, source: {kind: 'local-snapshot', path: '/private/source'}}, {...raw, lockfileSHA256: '0'.repeat(64)},
     {...raw, compiler: {...raw.compiler, path: '/private/compiler'}},
