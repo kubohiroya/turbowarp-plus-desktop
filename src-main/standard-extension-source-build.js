@@ -3,6 +3,7 @@ const {createHash} = require('node:crypto');
 const {existsSync, realpathSync} = require('node:fs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const {pathToFileURL} = require('node:url');
 const {verifyPayload, verifyBuildReceipt} = require('./standard-extension-payload');
 
 const MiB = 1024 * 1024;
@@ -204,6 +205,14 @@ function createStandardExtensionBuilder ({isPackaged, executable = process.execP
   }
   return {
     read: readSourceSnapshot,
+    async resolveGitHubSnapshot (repository, options) {
+      const currentLock = verifyPayload(payload);
+      if (currentLock.sha256 !== payloadLock.sha256) throw failure('LOCAL_EXTENSION_SOURCE_UNAVAILABLE');
+      // Import only application-owned files covered by the compiler payload lock.
+      const engine = await import(pathToFileURL(path.join(payload, 'node_modules/@kubohiroya/sb3-toolchain/dist/standard-extension-build.js')).href);
+      if (typeof engine.resolveGitHubExtensionSnapshot !== 'function') throw failure('LOCAL_EXTENSION_SOURCE_UNAVAILABLE');
+      return engine.resolveGitHubExtensionSnapshot('https://github.com/' + repository, options);
+    },
     async build (snapshot, signal) {
       return (await this.buildResult(snapshot, signal)).files;
     },

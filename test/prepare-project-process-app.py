@@ -34,6 +34,7 @@ paths = (
     "src-main/ai-agents.js", "src-main/local-extension-development.js",
     "src-main/standard-extension-source-build.js",
     "src-main/standard-extension-payload.js",
+    "src-main/github-extension-source-jobs.js",
     "src-main/merge-plan-mcp-ipc.js", "src-main/merge-plan-mcp.js",
     "src-preload/editor.js",
 )

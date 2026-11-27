@@ -33,6 +33,7 @@ const {createCredentialStore} = require('../local-git/credential-store');
 const {installEditorGit} = require('../local-git/editor-ipc');
 const {installLocalExtensionDevelopment} = require('../local-extension-development');
 const {createStandardExtensionBuilder} = require('../standard-extension-source-build');
+const {installGitHubExtensionSourceJobs} = require('../github-extension-source-jobs');
 const isTestRunWindow = details => details.frameName === 'tw-plus-test-run' && details.url === 'about:blank' && !details.postBody;
 const {installRepositoryCreation, loadCreationContract} = require('../local-git/repository-creation-ipc');
 const {createRepositoryCreationJournal} = require('../local-git/repository-creation-journal');
@@ -42,7 +43,7 @@ const {createGitCredentialHelper} = require('../local-git/git-credential-helper'
 const {PERSONAL_TOKEN} = require('../local-git/service');
 const {installEditorPopouts, isReservedPopout} = require('./editor-popouts');
 const {plusRenderer, editorPopouts, projectJSONTransfer, projectAssetTransfer, externalYaml,
-  gitPersonalAccessToken, gitCredentialHelper, aiAgents, mergePlanMcp, localExtensionSourceBuild} =
+  gitPersonalAccessToken, gitCredentialHelper, aiAgents, mergePlanMcp, localExtensionSourceBuild, githubExtensionSourceBuild} =
   require('../../config/feature-flags');
 
 const sourceBuilder = localExtensionSourceBuild && createStandardExtensionBuilder({isPackaged: app.isPackaged});
@@ -821,6 +822,7 @@ class EditorWindow extends ProjectRunningWindow {
     });
 
     const editorURL = new URL(`tw-editor://./${rendererDirectory}/gui.html`);
+    installGitHubExtensionSourceJobs(this.ipc, this.window.webContents, {builder: sourceBuilder, enabled: githubExtensionSourceBuild});
     if (plusRenderer) {
       this.window.webContents.on('did-create-window', (window, details) => {
         if (!isTestRunWindow(details)) return;

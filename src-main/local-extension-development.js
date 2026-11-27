@@ -100,14 +100,15 @@ const readSnapshot = async ({root, identity}) => {
   return snapshot;
 };
 
+const readSourceBuild = files => readCompletedBuild((name, limit) => {
+  const bytes = files.get(name);
+  if (!bytes || bytes.length > limit) throw failure('LOCAL_EXTENSION_SOURCE_LIMIT');
+  return bytes;
+});
+
 const buildFromSource = async (builder, directory, source, signal) => {
   const result = builder.buildResult ? await builder.buildResult(source, signal) : {files: await builder.build(source, signal)};
-  const {files} = result;
-  const snapshot = await readCompletedBuild((name, limit) => {
-    const bytes = files.get(name);
-    if (!bytes || bytes.length > limit) throw failure('LOCAL_EXTENSION_SOURCE_LIMIT');
-    return bytes;
-  });
+  const snapshot = await readSourceBuild(result.files);
   // Compilation runs against an immutable snapshot, but the chosen folder can change while it runs.
   // Publish only the output that still matches the current source generation.
   signal.throwIfAborted();
@@ -350,4 +351,4 @@ function installLocalExtensionDevelopment (ipc, webContents, {chooseDirectory, c
   webContents.once('destroyed', close);
 }
 
-module.exports = {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild, readDevelopmentFile: readFile};
+module.exports = {installLocalExtensionDevelopment, openDirectory, readDevelopmentBuild, readDevelopmentFile: readFile, readSourceBuild};
