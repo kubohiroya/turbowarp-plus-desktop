@@ -17,6 +17,8 @@ Template v0.13.0 以降の `pnpm dev` で作った拡張を作品から実行し
 
 ## ヘッドレス検証
 
+実行環境、compiler payload の照合、receipt・診断・容量の契約と検証範囲は [標準拡張ビルドの実行ホスト](standard-extension-build-host.md) を参照してください。
+
 固定 Editor のチェックアウトで `npm ci` を実行し、`npm run webpack:plus -- <Editorの固定チェックアウト> <GUIの固定チェックアウト>` で Desktop 用レンダラーを作ります。テストには Template v0.12.0 以降のチェックアウトを使います。
 
 ```sh
