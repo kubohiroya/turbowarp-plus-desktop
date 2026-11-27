@@ -51,6 +51,13 @@ const localGit = {
 };
 
 contextBridge.exposeInMainWorld('EditorPreload', {
+  githubExtensionSource: ipcRenderer.sendSync('github-extension-source-enabled') === true ? {
+    prepare: request => ipcRenderer.invoke('github-extension-source-prepare', request),
+    build: job => ipcRenderer.invoke('github-extension-source-build', job),
+    status: job => ipcRenderer.invoke('github-extension-source-status', job),
+    result: job => ipcRenderer.invoke('github-extension-source-result', job),
+    cancel: job => ipcRenderer.invoke('github-extension-source-cancel', job)
+  } : null,
   ...(ipcRenderer.sendSync('merge-plan-mcp-enabled') === true && {mergePlanShare}),
   localEditorAddons: ipcRenderer.sendSync('local-editor-addon-enabled') === true ? {
     list: () => ipcRenderer.invoke('local-editor-addon-list'),

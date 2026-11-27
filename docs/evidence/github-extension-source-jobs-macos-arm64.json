@@ -1,0 +1,51 @@
+{
+  "at": "2026-11-27T22:00:04.775Z",
+  "desktopCodeRevision": "321b588740ad19c68793bc03719165a00b6b323d",
+  "platform": "darwin",
+  "arch": "arm64",
+  "source": {
+    "kind": "github",
+    "repository": "kubohiroya/turbowarp-extension-template",
+    "commit": "b4cd60ecf9f2a3094dc446bf1b99dabaeb89517a"
+  },
+  "toolchain": "0.31.2",
+  "receipt": {
+    "formatVersion": 1,
+    "profile": "turbowarp-typescript-v1",
+    "execution": "sandboxed",
+    "compiler": {
+      "name": "rolldown",
+      "version": "1.3.4",
+      "integrity": "sha512-p2rq4bfBmF0M6yaR8+A89fbkBQynZI2fxUW4G07eq9kpctAkpo7q5BZ4X4Mo4XZ7HHROu33cX9PeopUFN6u+2Q=="
+    },
+    "snapshotSHA256": "ea43a33aed9a06dcc28303306c87faddb7e7e7086f75de58651a65561fbb7fed",
+    "lockfileSHA256": "679ba87c05a9b6b393a7e182bf887ffc29d1f5ac45168faa46704382f057676b",
+    "outputs": {
+      "example-extension.js": "6c77149bb4d28879c64bf98c12a9110afba1887bbb5892129e17d68da8b7e0e6",
+      "extension-manifest.json": "0e1dae3ad294b491feeb1f3ca7b8b9fa60e1eb794547e1040b3f39d8ce905b0d",
+      "example-extension.js.map": "ebbe4075a87d6e0c88c62d98b35599373162e988c2b97c85d78a33d6c721b326",
+      "extension-development.json": "057c89feee50d19f7dc8ec716e7e43b9daf586006505ce5b85a8849aa04915e7"
+    },
+    "source": {
+      "kind": "github",
+      "repository": "kubohiroya/turbowarp-extension-template",
+      "commit": "b4cd60ecf9f2a3094dc446bf1b99dabaeb89517a"
+    }
+  },
+  "measurements": {
+    "inputBytes": 71675,
+    "outputBytes": 4660,
+    "payloadBytes": 22354679,
+    "additionalRuntimeDownloadBytes": 0,
+    "cacheBytes": 0,
+    "temporaryDiskBytes": 0,
+    "sampledPeakResidentBytes": 73318400,
+    "elapsedMs": 109,
+    "downloadBytes": 147125
+  },
+  "preparedWithoutCompilation": true,
+  "sharedArtifactLockAccepted": true,
+  "cancelledResultUnavailable": true,
+  "validationScope": "Real public GitHub broker and isolated compiler with a previously built Electron 43.8.4 Node-mode runtime; in-process test IPC transport, no product renderer or new DMG tested.",
+  "matchesPR79Outputs": true
+}

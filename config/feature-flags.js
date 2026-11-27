@@ -28,3 +28,4 @@ exports.mergePlanMcp = exports.plusRenderer && !process.mas && process.env.TW_PL
 exports.gitPersonalAccessToken = process.env.TW_PLUS_DESKTOP_GIT_PERSONAL_ACCESS_TOKEN !== '0';
 exports.gitCredentialHelper = process.env.TW_PLUS_DESKTOP_GIT_CREDENTIAL_HELPER !== '0';
 exports.localExtensionSourceBuild = exports.plusRenderer && process.env.TW_PLUS_DESKTOP_EXTENSION_SOURCE_BUILD !== '0';
+exports.githubExtensionSourceBuild = exports.localExtensionSourceBuild && process.env.TW_PLUS_DESKTOP_GITHUB_EXTENSION_SOURCE_BUILD === '1';

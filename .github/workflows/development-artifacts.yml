@@ -84,6 +84,10 @@ jobs:
       - name: Install locked Desktop dependencies
         working-directory: desktop
         run: npm ci --no-audit --no-fund
+      - name: Verify source build broker contracts
+        if: matrix.os == 'linux'
+        working-directory: desktop
+        run: node --test test/github-extension-source-jobs.test.js test/local-extension-development.test.js test/local-extension-feedback.test.js
       - name: Install locked Editor dependencies
         working-directory: editor
         run: npm ci --no-audit --no-fund
