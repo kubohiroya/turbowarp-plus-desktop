@@ -4,6 +4,7 @@ import {parseExtensionMetadata} from '@kubohiroya/turbowarp-extension-security-d
 import {ExtensionRow} from '@kubohiroya/turbowarp-extension-security-dialog/react';
 import reviewStyles from '@kubohiroya/turbowarp-extension-security-dialog/project-review.css';
 import styles from './desktop-settings-menu.css';
+import {formatBuildBytes} from './source-build-feedback.mjs';
 
 const messages = locale => locale.startsWith('ja') ? {
   title: '拡張ブロックの開発フォルダ',
@@ -11,6 +12,11 @@ const messages = locale => locale.startsWith('ja') ? {
   folder: '開発フォルダ', add: '開発フォルダを追加…', remove: '一覧から外す', close: '閉じる',
   addSource: 'TypeScript ソースを自動ビルドするフォルダを追加…',
   sourceMode: 'Desktop でソースを自動ビルド', cancelAdd: '追加をキャンセル',
+  buildDiagnostic: 'ソースのビルドエラー',
+  measurements: '前回の正常ビルドの計測値',
+  measurementLabels: {payloadBytes: '共有ビルドツール（拡張間で共有）', additionalRuntimeDownloadBytes: '追加実行環境の取得',
+    inputBytes: '入力', outputBytes: '出力', cacheBytes: 'ビルドのキャッシュ', temporaryDiskBytes: 'ビルドの一時ファイル',
+    sampledPeakResidentBytes: '観測した最大メモリー使用量', elapsedMs: 'ビルド時間'},
   empty: '開発フォルダが登録されていません。',
   applied: '適用中のビルド', runtimeError: '拡張ブロックの実行エラー', waiting: '整合性を確認できる完成ビルドを待っています。'
 } : {
@@ -19,6 +25,11 @@ const messages = locale => locale.startsWith('ja') ? {
   folder: 'Development folder', add: 'Add Development Folder…', remove: 'Remove from list', close: 'Close',
   addSource: 'Add Folder and Build TypeScript Automatically…',
   sourceMode: 'Desktop builds source automatically', cancelAdd: 'Cancel Adding Folder',
+  buildDiagnostic: 'Source build error',
+  measurements: 'Last successful build measurements',
+  measurementLabels: {payloadBytes: 'Shared build tools (shared across extensions)', additionalRuntimeDownloadBytes: 'Additional runtime download',
+    inputBytes: 'Input', outputBytes: 'Output', cacheBytes: 'Build cache', temporaryDiskBytes: 'Build temporary files',
+    sampledPeakResidentBytes: 'Largest observed memory use', elapsedMs: 'Build time'},
   empty: 'No development folders are registered.',
   applied: 'Active build', runtimeError: 'Extension block runtime error', waiting: 'Waiting for a complete and verified build.'
 };
@@ -58,10 +69,25 @@ function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove, 
     </div>}
   >
     {session.buildError && <p className="twextsec-failed" role="status">{errorText(session.buildError)}</p>}
+    {session.buildError && session.buildDiagnostics?.length > 0 && <ul aria-label={text.buildDiagnostic}>
+      {session.buildDiagnostics.map(({code, file, line, column}, index) => <li key={index}>
+        <code>{`${file}:${line}:${column} (${code})`}</code>
+      </li>)}
+    </ul>}
     {session.error && <p className="twextsec-failed" role="alert">{errorText(session.error)}</p>}
     {diagnostic && <p className="twextsec-failed" role="status">
       {text.runtimeError} <code>{`${diagnostic.file}:${diagnostic.line}:${diagnostic.column}`}</code>
     </p>}
+    {session.mode === 'source' && session.measurements && <details>
+      <summary>{text.measurements}</summary>
+      <dl>
+        {Object.entries(text.measurementLabels).filter(([name]) => session.measurements[name] !== undefined).map(([name, label]) =>
+          <React.Fragment key={name}>
+            <dt>{label}</dt>
+            <dd>{name === 'elapsedMs' ? `${session.measurements[name]} ms` : formatBuildBytes(session.measurements[name])}</dd>
+          </React.Fragment>)}
+      </dl>
+    </details>}
     {renderSettings?.(session)}
     <div className="twextsec-actions">
       <button type="button" onClick={() => onRemove(session.token)} disabled={session.busy || session.removing}>{text.remove}</button>

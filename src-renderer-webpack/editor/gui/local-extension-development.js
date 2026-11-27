@@ -1,4 +1,5 @@
 import {getExtensionAuthoringHost} from './local-extension-authoring.js';
+import {sourceBuildDiagnostics, sourceBuildMeasurements} from './source-build-feedback.mjs';
 
 export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsChanged) => {
   const sessions = new Map();
@@ -11,8 +12,8 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
 
   const publishSessions = () => {
     if (disposed) return;
-    onSessionsChanged(Array.from(sessions, ([token, {directory, id, sourceHeader, enabled, busy, error, sha256, waiting, diagnostic, mode, buildError}]) =>
-      ({token, directory, id, sourceHeader, enabled, busy, error, appliedDigest: sha256, waiting, diagnostic, mode, buildError})));
+    onSessionsChanged(Array.from(sessions, ([token, {directory, id, sourceHeader, enabled, busy, error, sha256, waiting, diagnostic, mode, buildError, buildDiagnostics, measurements}]) =>
+      ({token, directory, id, sourceHeader, enabled, busy, error, appliedDigest: sha256, waiting, diagnostic, mode, buildError, buildDiagnostics, measurements})));
   };
 
   const unsubscribeDiagnostic = host.resolveDiagnostic &&
@@ -35,6 +36,7 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
     session.enabled = false;
     session.waiting = false;
     session.buildError = null;
+    session.buildDiagnostics = [];
     pending.delete(token);
     session.controller.abort();
   };
@@ -91,6 +93,7 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
       await authoring.applyDevelopmentBuild({id: build.id, sha256: build.sha256,
         previousSHA256: session.sha256 ?? undefined, bytes: new Uint8Array(build.bytes)},
       ({id, sha256}) => host.authorize(build.session, id, sha256), {signal: controller.signal});
+      if (sessions.get(build.session) !== session || controller.signal.aborted) return;
       session.sha256 = build.sha256;
     }
     if (mappingChanged) {
@@ -103,7 +106,9 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
           code: sourceDecoder.decode(new Uint8Array(build.bytes))};
       }
     }
+    if (sessions.get(build.session) !== session || controller.signal.aborted) return;
     session.sourceHeader = readHeader(build);
+    session.measurements = sourceBuildMeasurements(build.measurements);
     session.error = null;
     publishSessions();
   };
@@ -163,13 +168,13 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
   };
 
   const unsubscribeBuild = host.onBuild(enqueue);
-  const unsubscribeArtifacts = host.onArtifacts(({session, waiting, code}) => {
+  const unsubscribeArtifacts = host.onArtifacts(({session, waiting, code, diagnostics}) => {
+    const feedback = {waiting, buildError: code, buildDiagnostics: code ? sourceBuildDiagnostics(diagnostics) : []};
     const current = sessions.get(session);
     if (!current) {
-      opening?.artifacts.set(session, {waiting, buildError: code});
+      opening?.artifacts.set(session, feedback);
     } else if (current.enabled || current.busy) {
-      current.waiting = waiting;
-      current.buildError = code;
+      Object.assign(current, feedback);
       publishSessions();
     }
   });
