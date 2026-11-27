@@ -1,0 +1,74 @@
+{
+  "toolchainReference": "@kubohiroya/sb3-toolchain@0.31.3 / 473bcdbf8fbf2e39b6103cf75a8ba1949593bfa7",
+  "matchesNodeReference": true,
+  "at": "2026-11-27T22:12:43.577Z",
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "26.7.0"
+  },
+  "environment": {
+    "electron": "43.8.4",
+    "node": "24.22.1",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "source": {
+    "kind": "github",
+    "repository": "kubohiroya/turbowarp-extension-template",
+    "commit": "13ff059a303963e583ca1d7a7f06ca158d05ae71"
+  },
+  "sourceMeasurements": {
+    "downloadBytes": 143316,
+    "snapshotBytes": 71940,
+    "cacheBytes": 0,
+    "temporaryDiskBytes": 0
+  },
+  "measurements": {
+    "outputBytes": 4660,
+    "sampledPeakResidentBytes": 81510400,
+    "elapsedMs": 117,
+    "cacheBytes": 0,
+    "temporaryDiskBytes": 0,
+    "inputBytes": 71940,
+    "payloadBytes": 22386873,
+    "additionalRuntimeDownloadBytes": 0
+  },
+  "receipt": {
+    "formatVersion": 1,
+    "profile": "turbowarp-typescript-v1",
+    "execution": "sandboxed",
+    "compiler": {
+      "name": "rolldown",
+      "version": "1.3.4",
+      "integrity": "sha512-p2rq4bfBmF0M6yaR8+A89fbkBQynZI2fxUW4G07eq9kpctAkpo7q5BZ4X4Mo4XZ7HHROu33cX9PeopUFN6u+2Q=="
+    },
+    "snapshotSHA256": "478ed8855d35d05119d397010fa44ca5a4e8379a77bba7da2faafcaa36d6ad9a",
+    "lockfileSHA256": "bf2796e94794e31aa03d21358e375cefb3b6a0618c82212fb233c26155b2b8ca",
+    "outputs": {
+      "example-extension.js": "6c77149bb4d28879c64bf98c12a9110afba1887bbb5892129e17d68da8b7e0e6",
+      "extension-manifest.json": "0e1dae3ad294b491feeb1f3ca7b8b9fa60e1eb794547e1040b3f39d8ce905b0d",
+      "example-extension.js.map": "ebbe4075a87d6e0c88c62d98b35599373162e988c2b97c85d78a33d6c721b326",
+      "extension-development.json": "057c89feee50d19f7dc8ec716e7e43b9daf586006505ce5b85a8849aa04915e7"
+    },
+    "source": {
+      "kind": "github",
+      "repository": "kubohiroya/turbowarp-extension-template",
+      "commit": "13ff059a303963e583ca1d7a7f06ca158d05ae71"
+    }
+  },
+  "repeatedReceiptEqual": true,
+  "sb3Roundtrip": true,
+  "localSnapshot": true,
+  "toolchainVersion": "0.31.3",
+  "manifestVersion": "0.9.1",
+  "templateVersion": "0.13.2",
+  "nativeTests": {
+    "passed": 15,
+    "skipped": 0
+  },
+  "lowerNodeMatrixRetest": false,
+  "productRuntimeCompatibilityCheck": true,
+  "packagedProductRendererTested": false,
+  "otherOsOrArchitectureTested": false
+}

@@ -9,7 +9,7 @@
 - 実測した環境は macOS arm64、Electron 43.8.4 の Node 24.22.1。
 - Electron の Node モードを再利用する。専用 Node の追加取得量は 0 bytes。Node モードが有効な fuse は配布物作成時に既存の検査で確認する。
 - Windows・Linux・Mac App Store は source build を提供しない。macOS x64 の今回の native 検証は未実施。通常の公開拡張と外部ビルド成果物の監視は従来のまま利用できる。
-- 現在の Desktop の固定コンパイラーは公開版 Toolchain 0.30.0／Rolldown 1.3.3。未知の field を拒否した上で未版管理だった receipt を形式 1 に変換し、Toolchain #109 の共有 validator と SB3 reader で受け入れを確認した。Toolchain の追加公開・npm publish は行っていない。
+- 現在の Desktop の固定コンパイラーは公開版 Toolchain 0.31.3／Manifest 0.9.1／Rolldown 1.3.4。形式 1 の receipt と compiler integrity を照合し、従来の未版管理 receipt の変換も維持する。Toolchain の npm 公開をこの Desktop 差分で行わない。
 
 Electron の Node モードは [RunAsNode fuse](https://www.electronjs.org/docs/latest/tutorial/fuses#runasnode) に依存する。utility process と専用 Node を、OS 隔離の代替に扱わない。macOS の `sandbox-exec` は非推奨の OS ツールであり、存在確認だけで将来の対応を保証しない。利用できなければ source build を停止する。専用 Node／別の隔離 backend の配布容量は今回未測定。
 
@@ -55,9 +55,19 @@ receipt は snapshot、lockfile、compiler の版と integrity、全出力 hash 
 - 2 回の receipt が一致。Electron 内の Node 24.22.1 の全出力 hash は、Toolchain #109 の Node 26.7.0 の基準値とも一致した。両方とも macOS arm64 であり、OS・architecture 間の一致を保証する測定ではない。
 - payload は 21,957,054 bytes、標準 snapshot は 71,675 bytes、出力は 4,660 bytes。観測 RSS と処理時間は証拠 JSON の値を参照する。
 
+### Toolchain 0.31.3 への追従検証
+
+[公開版を使う追加証拠](evidence/standard-extension-host-toolchain-0.31.3-macos-arm64.json) は PR #79 の実行ホストを前提に、Toolchain 0.31.3／Manifest 0.9.1／Rolldown 1.3.4 と公開 Template 0.13.2 を検証した。上記の初回測定は履歴として保持する。
+
+- Node 26 の対象 15 tests が、実 Electron 43.8.4 の headless Node モードを使って skip なしで成功。製品内蔵の Node 24.22.1 は実行ホストの互換性確認に使用し、通常テストの Node 24／26 の重複 matrix は追加していない。
+- Template の commit `13ff059a303963e583ca1d7a7f06ca158d05ae71` を dist なしで取得し、独立した隔離 build 2 回の全 output hash と、公開 Toolchain の Node 26 基準値が一致。共有 lock validator、SB3 保存・展開・再build、local snapshot も成功した。
+- 展開済み payload は 271 ファイル・22,386,873 bytes。初回測定より 429,819 bytes 増加し、専用 Node の追加取得は 0 bytes。入力は 71,940 bytes、出力は 4,660 bytes。初回 download・圧縮インストーラー増分・厳密な peak RAM の測定とは区別する。
+- 更新は Toolchain の依存 graph に限定する。新版の形式 1 receipt 受理、compiler integrity 改変と worker 由来の出所偽装の拒否を回帰検査へ追加した。横断検証スクリプトは新しい基準値を使い、clean checkout で証拠出力先がない場合も作成する。
+- 検証は prepare 済み payload と既存の信頼する Electron runtime の組合せ。新しい DMG／製品 renderer、macOS x64、Windows／Linux／MAS の source build は検証していない。PR #79 の統合と #67／Toolchain #103 の残る受け入れは継続する。
+
 通常の unit test は `node --test test/local-extension-development.test.js test/local-extension-source-build.test.js`。native の境界・compiler テストも実行する場合は、`TW_PLUS_SOURCE_BUILD_ELECTRON` に信頼する Electron の実行ファイル、`TW_PLUS_SOURCE_BUILD_RESOURCES` に今回の compiler を含む Resources を指定する。package の afterPack はこの組合せを検証する既存の経路を使用する。
 
-Toolchain の取得と共有保存契約の横断検証は次のコマンドで再現する。Toolchain は #109 を含む信頼する checkout からビルドしたものを用いる。未信頼の拡張ソースをこの変数へ指定しない。
+Toolchain の取得と共有保存契約の横断検証は次のコマンドで再現する。Toolchain は公開版 0.31.3 を固定して導入した package directory、または同版の信頼する checkout からビルドしたものを用いる。未信頼の拡張ソースをこの変数へ指定しない。
 
 ```sh
 TW_PLUS_SOURCE_BUILD_TOOLCHAIN=/absolute/path/to/trusted-sb3-toolchain \
