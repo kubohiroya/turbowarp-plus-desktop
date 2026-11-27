@@ -44,11 +44,13 @@ test('renderer preserves the last applied measurements through failure and updat
   const initial = {session: 'lease', id: 'fixture', sha256: 'first', directory: '/chosen', mode: 'source',
     bytes: Buffer.from('// fixture'), measurements: {inputBytes: 100, payloadBytes: 200}};
   let failApply = false;
+  let applyGate;
   const authoring = {
     inspect: async () => ({extensions: []}),
     onProjectReplacement: callback => { events.set('replacement', callback); return () => {}; },
     onDispose: () => () => {},
     applyDevelopmentBuild: async (build, authorize) => {
+      if (applyGate) await applyGate;
       if (failApply) throw new Error('fixture transaction failed');
       assert.equal(await authorize(build), true);
       applied.push(build.sha256);
@@ -89,9 +91,18 @@ test('renderer preserves the last applied measurements through failure and updat
   await flush();
   assert.equal(current().appliedDigest, 'first');
   assert.deepEqual(current().measurements, {inputBytes: 110, payloadBytes: 200});
+  failApply = false;
+  let release;
+  applyGate = new Promise(resolve => { release = resolve; });
+  listeners.Build({...initial, sha256: 'third', measurements: {inputBytes: 700}});
+  await flush();
   listeners.Artifacts({session: 'lease', code: 'LOCAL_EXTENSION_SOURCE_FAILED', diagnostics});
   await connection.setEnabled('lease', false);
+  release();
+  await flush();
   assert.deepEqual(current().buildDiagnostics, []);
+  assert.deepEqual(current().measurements, {inputBytes: 110, payloadBytes: 200});
+  assert.equal(current().appliedDigest, 'first');
   connection.dispose();
 });
 

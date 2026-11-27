@@ -93,6 +93,7 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
       await authoring.applyDevelopmentBuild({id: build.id, sha256: build.sha256,
         previousSHA256: session.sha256 ?? undefined, bytes: new Uint8Array(build.bytes)},
       ({id, sha256}) => host.authorize(build.session, id, sha256), {signal: controller.signal});
+      if (sessions.get(build.session) !== session || controller.signal.aborted) return;
       session.sha256 = build.sha256;
     }
     if (mappingChanged) {
@@ -105,6 +106,7 @@ export const connectLocalExtensionDevelopment = (vm, host, notify, onSessionsCha
           code: sourceDecoder.decode(new Uint8Array(build.bytes))};
       }
     }
+    if (sessions.get(build.session) !== session || controller.signal.aborted) return;
     session.sourceHeader = readHeader(build);
     session.measurements = sourceBuildMeasurements(build.measurements);
     session.error = null;
