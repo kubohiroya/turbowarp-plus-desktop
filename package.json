@@ -25,7 +25,7 @@
   "dependencies": {
     "@kubohiroya/turbowarp-plus-editor-auth": "0.5.0",
     "@kubohiroya/turbowarp-plus-editor-git": "0.27.3",
-    "postcss": "8.5.31",
+    "postcss": "8.5.33",
     "semver": "^7.7.3",
     "yauzl": "2.10.0",
     "react": "16.14.0",
