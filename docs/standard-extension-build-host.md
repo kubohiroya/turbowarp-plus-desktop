@@ -1,5 +1,7 @@
 # 標準拡張ビルドの実行ホスト
 
+GitHub 取得を接続する後続差分の契約、Toolchain 0.31.2／Rolldown 1.3.4 への更新と証跡は [GitHub ソース job API](github-extension-source-jobs.md) を参照。以下の実測は PR #79 の Toolchain 0.30.0／Rolldown 1.3.3 の記録として保持する。
+
 対象は [Desktop #67](https://github.com/kubohiroya/turbowarp-plus-desktop/issues/67) と [Toolchain #103](https://github.com/kubohiroya/sb3-toolchain/issues/103)。ビルド本体は Toolchain、実行環境・OS 境界・容量と IPC は Desktop が所有する。
 
 ## 今回の変更と対応範囲
