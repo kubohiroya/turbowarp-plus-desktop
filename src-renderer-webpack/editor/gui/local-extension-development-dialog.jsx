@@ -1,9 +1,13 @@
 import React from 'react';
 import Modal from 'scratch-gui/src/components/modal/modal.jsx';
 import {parseExtensionMetadata} from '@kubohiroya/turbowarp-extension-security-dialog';
-import {ExtensionRow} from '@kubohiroya/turbowarp-extension-security-dialog/react';
+import * as SecurityComponents from '@kubohiroya/turbowarp-extension-security-dialog/react';
 import reviewStyles from '@kubohiroya/turbowarp-extension-security-dialog/project-review.css';
 import styles from './desktop-settings-menu.css';
+
+const {ExtensionRow} = SecurityComponents;
+const sharedDevelopmentView = components => typeof components.ExtensionDevelopment === 'function' ?
+  components.ExtensionDevelopment : null;
 
 const messages = locale => locale.startsWith('ja') ? {
   title: '拡張ブロックの開発フォルダ',
@@ -69,7 +73,19 @@ function DevelopmentRow ({session, locale, text, errorText, onToggle, onRemove, 
   </ExtensionRow>;
 }
 
+const ExtensionFrame = ({title, onCancel, children}) => <Modal contentLabel={title}
+  className={reviewStyles.frame} onRequestClose={onCancel}>
+  <div className={`${reviewStyles.body} ${styles.developmentBody}`}>{children}</div>
+</Modal>;
+
 export function LocalExtensionDevelopmentDialog ({locale, sessions, error, errorText, adding, onClose, onAdd, onCancelAdd, sourceBuild, onToggle, onRemove, kind, renderSettings}) {
+  const DevelopmentView = sharedDevelopmentView(SecurityComponents);
+  if (kind !== 'addon' && DevelopmentView) return <DevelopmentView
+    capabilities={{localDevelopment: true, sourceBuild: sourceBuild === true}}
+    sessions={sessions.map(session => ({...session, execution: 'sandboxed'}))}
+    {...{locale, error, adding, onClose, onAdd, onCancelAdd, onToggle, onRemove}}
+    DialogFrame={ExtensionFrame}
+  />;
   const text = {...messages(locale), ...(kind === 'addon' && addonMessages(locale))};
   return <Modal contentLabel={text.title} className={reviewStyles.frame} onRequestClose={onClose}>
     <div className={`${reviewStyles.body} ${styles.developmentBody}`}>
