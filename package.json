@@ -136,8 +136,9 @@
     "mac": {
       "extraResources": [
         {
-          "from": "dist-standard-extension-compiler/${arch}",
-          "to": "standard-extension-compiler/${arch}"
+          "from": "dist-standard-extension-compiler",
+          "to": "standard-extension-compiler",
+          "filter": ["${arch}/**/*"]
         }
       ],
       "artifactName": "${productName}-Setup-${version}.${ext}",
