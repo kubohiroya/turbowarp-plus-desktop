@@ -956,6 +956,7 @@ class EditorWindow extends ProjectRunningWindow {
       this.ipc.on('local-git-auth-enabled', event => { event.returnValue = false; });
       this.ipc.on('local-git-publication-enabled', event => { event.returnValue = false; });
       this.ipc.on('local-git-author-enabled', event => { event.returnValue = false; });
+      this.ipc.on('pair-git-enabled', event => { event.returnValue = false; });
     }
     installRepositoryCreation(this.ipc, this.window.webContents, creationContract && {
       clientId: creationClientId, contract: creationContract, journal: creationJournal,
