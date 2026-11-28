@@ -120,6 +120,11 @@ contextBridge.exposeInMainWorld('EditorPreload', {
   ...(ipcRenderer.sendSync('editor-popouts-enabled') === true && {
     reservePopout: (kind, ticket) => ipcRenderer.sendSync('reserve-editor-popout', kind, ticket)
   }),
+  // Renames the open project folder: the user picks it in an OS dialog of the main process, which renames it only when
+  // it carries `currentName`. Resolves to {renamed: true, name} or {renamed: false, reason}.
+  projectFolderRename: ipcRenderer.sendSync('project-folder-rename-enabled') === true ? {
+    rename: (currentName, newName) => ipcRenderer.invoke('project-folder-rename', currentName, newName)
+  } : null,
   // Only saved entries are launched, by ID. Applications are chosen and confirmed in OS dialogs of the main process.
   aiAgents: ipcRenderer.sendSync('ai-agents-enabled') === true ? {
     list: () => ipcRenderer.invoke('ai-agents-list'),
