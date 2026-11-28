@@ -51,7 +51,7 @@ function fixture (onGit = () => new Response('git-bytes', {headers: {'Content-Ty
         assert.equal(options.body.has('client_secret'), false);
         return Response.json(oauthResponses.shift() ?? tokens());
       }
-      if (pathname === '/user') return Response.json({login: 'fixture-user'});
+      if (pathname === '/user') return Response.json({id:1,login:'fixture-user'});
       if (onApi && (pathname === '/graphql' || /^\/repos\/[^/]+\/[^/]+\/pulls(?:\/|$)/u.test(pathname))) {
         return onApi(url, options);
       }
@@ -71,7 +71,7 @@ test('device login exposes display fields and serializes token rotation', async 
   const auth = createGitHubAuth('Iv1_test', upstream);
   upstream.oauthResponses.push({error: 'authorization_pending'}, {error: 'slow_down'}, tokens('one', 10), tokens('two'));
   assert.deepEqual(await auth.begin(), {userCode: 'ABCD-EFGH', verificationUri: 'https://github.com/login/device', expiresAt: 160_000});
-  assert.deepEqual(await auth.finish(), {account: {login: 'fixture-user'}, expiresAt: 118_000, remembered: false});
+  assert.deepEqual(await auth.finish(), {account: {id:1,login:'fixture-user'}, expiresAt: 118_000, remembered: false});
   assert.deepEqual(upstream.waitTimes, [1000, 1000, 6000]);
   upstream.advance(10_000);
   const refreshed = await Promise.all([auth.getCredentials(), auth.getCredentials()]);
@@ -93,6 +93,22 @@ test('device polling cannot restore credentials after disconnect', async () => {
   resume();
   await assert.rejects(pending, {name: 'AbortError'});
   await assert.rejects(auth.getCredentials(), {code: 'REAUTH_REQUIRED'});
+});
+
+test('token rotation verifies the immutable GitHub ID while allowing a login rename',async()=>{
+  for(const changedId of [false,true]){
+    let time=1000,rotated=false;
+    const auth=createGitHubAuth('Iv1_test',{now:()=>time,wait:async()=>{},request:async(url)=>{
+      const path=new URL(url).pathname;
+      if(path==='/login/device/code')return Response.json({device_code:'device',user_code:'ABCD-EFGH',verification_uri:'https://github.com/login/device',expires_in:600,interval:1});
+      if(path==='/login/oauth/access_token'){const response=tokens(rotated?'two':'one',1);rotated=true;return Response.json(response);}
+      return Response.json({id:changedId&&time>1000?99:1,login:time>1000?'renamed-user':'first-name'});
+    }});
+    await auth.begin(false);await auth.finish();time=3000;
+    if(changedId){await assert.rejects(auth.getCredentials(),{code:'REAUTH_REQUIRED'});assert.equal(auth.getState().status,'disconnected');}
+    else{const renewed=await auth.getCredentials();assert.equal(renewed.account.id,1);assert.equal(renewed.account.login,'renamed-user');}
+    auth.disconnect();
+  }
 });
 
 async function start (t, upstream) {
@@ -434,7 +450,7 @@ function gitHubStub () {
     switch (operation) {
       case 'pullRequestReviewContext':
         assert.deepEqual(Object.keys(variables).sort(), ['name', 'number', 'owner']);
-        return {data: {viewer: {login: stub.viewer}, repository: {
+        return {data: {viewer: {login:stub.viewer}, repository: {
           databaseId: stub.repositoryId,
           pullRequest: variables.number !== 7 ? null : {
             id: 'PR_node', headRefOid: head,
@@ -690,7 +706,7 @@ test('GitHub API reads send only the GitHub credential to canonical URLs and ret
   for (const method of ['log', 'info', 'warn', 'error', 'debug']) t.mock.method(console, method, (...args) => logged.push(args));
   const list = await ok(api('/pulls?page=2', {headers: {Cookie: 'local=1', Referer: 'https://private.invalid'}}));
   assert.deepEqual(list[0], {number: 7, title: 'Title 7', state: 'open', draft: false, merged_at: null,
-    updated_at: '2026-11-11T00:00:00Z', user: {login: 'author'}, head: {sha: head, ref: 'feature'},
+    updated_at: '2026-11-11T00:00:00Z', user: {login:'author'}, head: {sha: head, ref: 'feature'},
     base: {sha: 'b'.repeat(40), ref: 'main'}});
   const listCall = github.calls.at(-1);
   assert.equal(listCall.url,
@@ -701,7 +717,7 @@ test('GitHub API reads send only the GitHub credential to canonical URLs and ret
 
   upstream.repositories.get('/repos/owner/project').full_name = 'owner/project';
   const pull = await ok(api('/pulls/7'));
-  assert.deepEqual(pull, {number: 7, title: 'Title 7', state: 'open', draft: false, merged_at: null, user: {login: 'author'},
+  assert.deepEqual(pull, {number: 7, title: 'Title 7', state: 'open', draft: false, merged_at: null, user: {login:'author'},
     body: 'markdown', body_text: 'plain', changed_files: 3, head: {sha: head, ref: 'feature', repo: null},
     base: {sha: 'b'.repeat(40), ref: 'main', repo: {full_name: 'owner/project'}}});
   assert.equal(github.calls.at(-1).headers.Accept, 'application/vnd.github.text+json');
@@ -953,7 +969,7 @@ test('turning off review-threads alone leaves the review body routes working', a
   assert.deepEqual(github.calls.at(-1).body, {commit_id: head, event: 'COMMENT', body: 'Overall'});
   await errorWith(createReview({commit_id: head, event: 'COMMENT', body: 'Overall'}), 409, 'REVIEW_DUPLICATE');
   const reviews = await ok(api('/pulls/7/reviews?page=1'));
-  assert.deepEqual(reviews, [{id: created.id, user: {login: 'reviewer'}, commit_id: head, state: 'COMMENTED',
+  assert.deepEqual(reviews, [{id: created.id, user: {login:'reviewer'}, commit_id: head, state: 'COMMENTED',
     submitted_at: '2026-11-11T01:00:00Z', body: 'Overall'}]);
   github.faults.push({operation: 'createReview', response: () => Response.json({message: 'secret'}, {status: 422})});
   await errorWith(createReview({commit_id: head, event: 'APPROVE'}, submitId(2)), 422, 'REVIEW_REJECTED');
@@ -1107,7 +1123,7 @@ test('fine-grained token uses the same repository and operation checks as Device
   t.after(() => service.close());
   await assert.rejects(service.begin(), {code: 'GIT_UNAVAILABLE'});
   assert.deepEqual(await service.connectPersonalAccessToken('https://github.com/OWNER/Project'), {
-    status: 'connected', account: {login: 'fixture-user'}, remembered: false
+    status: 'connected', account: {id:1,login:'fixture-user'}, remembered: false
   });
   assert.equal(upstream.calls[0].url, 'https://api.github.com/repos/OWNER/Project');
   assert.equal(upstream.calls[0].options.headers.Authorization, 'Bearer ' + token);
@@ -1335,7 +1351,7 @@ test('Git credential connections require native consent and the confirmed GitHub
   assert.deepEqual(steps.splice(0), ['probe', 'confirm', 'read']);
   assert.equal(service.getState().status, 'disconnected');
   assert.deepEqual(await service.connectGitCredential(desktopRemote, 'FIXTURE-USER'), {
-    status: 'connected', account: {login: 'fixture-user'}, remembered: false
+    status: 'connected', account: {id:1,login:'fixture-user'}, remembered: false
   });
   const session = await service.createSession(desktopRemote);
   assert.equal(JSON.stringify(session).includes(token), false);

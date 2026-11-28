@@ -52,7 +52,7 @@ function fakeGitHub () {
       });
       assert.equal(target.origin, 'https://api.github.com');
       assert.equal(headers.Authorization, 'Bearer ' + token);
-      if (target.pathname === '/user') return Response.json({login: 'fixture'});
+      if (target.pathname === '/user') return Response.json({id:1,login:'fixture'});
       if (target.pathname === '/repos/fixture/work') return Response.json({
         id: 7, full_name: 'fixture/work', permissions: {pull: true, push: true}
       });

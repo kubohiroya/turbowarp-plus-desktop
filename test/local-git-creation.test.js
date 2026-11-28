@@ -72,7 +72,7 @@ function fakeGitHub (options = {}) {
       }
       assert.equal(target.origin, 'https://api.github.com');
       assert.equal(headers.Authorization, 'Bearer ' + accessToken);
-      if (route === '/user') return Response.json({login: 'octocat'});
+      if (route === '/user') return Response.json({id: 1, login: 'octocat'});
       if (route === '/user/installations') return Response.json({total_count: 4, installations: [
         {account: {login: 'octocat'}, target_type: 'User',
           permissions: {repository_creation: 'write', contents: 'write', ...(options.topics && {administration: 'write'})}},

@@ -14,7 +14,7 @@ function isTrustedEditorGitEvent (event, webContents) {
 }
 
 function installEditorGit (ipc, webContents, {
-  clientId, store, githubApi, promptPersonalToken, gitCredentialHelper, confirmGitCredential, publication,
+  clientId, store, githubApi, promptPersonalToken, gitCredentialHelper, confirmGitCredential, confirmPairRepository, publication,
   readAuthor = readGlobalGitAuthor
 }) {
   const methods = [];
@@ -26,7 +26,7 @@ function installEditorGit (ipc, webContents, {
     return isTrustedEditorGitEvent(event, webContents);
   }
 
-  installEditorGitAccounts(ipc, webContents, {clientId, githubApi}, trusted);
+  installEditorGitAccounts(ipc, webContents, {clientId, githubApi, confirmRepository: confirmPairRepository}, trusted);
 
   async function getService (start) {
     if (!active && start) {
