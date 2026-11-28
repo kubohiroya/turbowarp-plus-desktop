@@ -930,6 +930,17 @@ class EditorWindow extends ProjectRunningWindow {
             return response === 1;
           }
         },
+        confirmPairRepository: async ({account, repository, write, review}, signal) => {
+          const ja = settings.locale?.startsWith('ja');
+          const operations = [write && (ja ? 'プッシュ' : 'Push'), review && (ja ? 'レビュー送信' : 'Submit reviews')].filter(Boolean);
+          const {response} = await dialog.showMessageBox(this.window, {
+            type: 'question', title: APP_NAME,
+            message: ja ? 'このアカウントでGitHubの操作を許可しますか？' : 'Allow GitHub operations as this account?',
+            detail: `@${account.login} (GitHub ID ${account.id})\ngithub.com/${repository.owner}/${repository.repo} (ID ${repository.id})\n${operations.join(' / ')}`,
+            buttons: ja ? ['キャンセル', '許可'] : ['Cancel', 'Allow'], cancelId: 0, defaultId: 0, noLink: true, signal
+          });
+          return response === 1;
+        },
         confirmGitCredential: async ({owner, repo}, login, signal) => {
           const {response} = await dialog.showMessageBox(this.window, {
             type: 'question', title: APP_NAME,
@@ -945,6 +956,7 @@ class EditorWindow extends ProjectRunningWindow {
       this.ipc.on('local-git-auth-enabled', event => { event.returnValue = false; });
       this.ipc.on('local-git-publication-enabled', event => { event.returnValue = false; });
       this.ipc.on('local-git-author-enabled', event => { event.returnValue = false; });
+      this.ipc.on('pair-git-enabled', event => { event.returnValue = false; });
     }
     installRepositoryCreation(this.ipc, this.window.webContents, creationContract && {
       clientId: creationClientId, contract: creationContract, journal: creationJournal,

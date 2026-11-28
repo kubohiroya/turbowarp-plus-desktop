@@ -3,6 +3,7 @@ const {startDesktopGit, PERSONAL_TOKEN, GIT_CREDENTIAL_HELPER} = require('./serv
 const {parseRemote} = require('./git-proxy');
 const {createDesktopPublication} = require('./publication');
 const {readGlobalGitAuthor} = require('./global-author');
+const {installEditorGitAccounts} = require('./account-pool');
 
 const EDITOR_DOCUMENT = 'tw-editor://./plus-gui/gui.html';
 let active = null;
@@ -13,7 +14,7 @@ function isTrustedEditorGitEvent (event, webContents) {
 }
 
 function installEditorGit (ipc, webContents, {
-  clientId, store, githubApi, promptPersonalToken, gitCredentialHelper, confirmGitCredential, publication,
+  clientId, store, githubApi, promptPersonalToken, gitCredentialHelper, confirmGitCredential, confirmPairRepository, publication,
   readAuthor = readGlobalGitAuthor
 }) {
   const methods = [];
@@ -24,6 +25,8 @@ function installEditorGit (ipc, webContents, {
   function trusted (event) {
     return isTrustedEditorGitEvent(event, webContents);
   }
+
+  installEditorGitAccounts(ipc, webContents, {clientId, githubApi, confirmRepository: confirmPairRepository}, trusted);
 
   async function getService (start) {
     if (!active && start) {

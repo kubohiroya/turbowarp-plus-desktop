@@ -12,13 +12,15 @@ const isPersonalToken = token => typeof token === 'string' && /^github_pat_[A-Za
 const sameRemote = (a, b) => a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase();
 
 async function startDesktopGit ({
-  clientId, githubApi, request = fetch, now = Date.now, wait, store, promptPersonalToken, gitCredentialHelper, confirmGitCredential
+  clientId, githubApi, request = fetch, now = Date.now, wait, store, promptPersonalToken, gitCredentialHelper, confirmGitCredential,
+  confirmRepository
 } = {}) {
   const github = createGitHubAuth(clientId, {request, now, wait, store});
   let lifetime = new AbortController();
   let revision = 0;
   let session = null;
   let closed = false;
+  let closing = null;
   let localToken = null;
   let tokenReauthRequired = false;
   let authOperation = null;
@@ -71,10 +73,10 @@ async function startDesktopGit ({
     if (expectedId !== undefined && approved.id !== expectedId) throw new GitServiceError(403, 'FORBIDDEN');
     const user = await github.user(accessToken, signal);
     signal.throwIfAborted();
-    if (!isGitHubLogin(user.login) || user.login === accessToken) {
+    if (!isGitHubLogin(user.login) || user.login === accessToken || !Number.isSafeInteger(user.id) || user.id <= 0) {
       throw new GitServiceError(401, 'REAUTH_REQUIRED');
     }
-    return {accessToken, repository: approved, account: {login: user.login}};
+    return {accessToken, repository: approved, account: {id: user.id, login: user.login}};
   }
 
   async function runAuthOperation (operation) {
@@ -261,13 +263,27 @@ async function startDesktopGit ({
       if (credentials.repository && !sameRemote(remote, credentials.repository)) {
         throw new GitServiceError(403, 'FORBIDDEN');
       }
+      const user = await github.user(accessToken, signal);
+      if (!isGitHubLogin(user.login) || !Number.isSafeInteger(user.id) || user.id <= 0 ||
+          account.id !== undefined && account.id !== user.id) {
+        reset();
+        throw new GitServiceError(401, 'REAUTH_REQUIRED');
+      }
+      const verifiedAccount = Object.freeze({id: user.id, login: user.login});
       const approved = await repository(remote, write, accessToken, signal);
       if (credentials.repository && approved.id !== credentials.repository.id) {
         throw new GitServiceError(403, 'FORBIDDEN');
       }
+      if ((write || review) && confirmRepository) {
+        signal.throwIfAborted();
+        const allowed = await confirmRepository(Object.freeze({account: verifiedAccount,
+          repository: Object.freeze({...approved}), write, review}), signal);
+        signal.throwIfAborted();
+        if (allowed !== true) throw new GitServiceError(403, 'FORBIDDEN');
+      }
       if (signal.aborted || ticket !== revision || expiresAt <= now()) throw new GitServiceError(401, 'SESSION_EXPIRED');
       const publicSession = Object.freeze({
-        connection, account: Object.freeze({...account}),
+        connection, account: verifiedAccount,
         expiresAt: Math.min(expiresAt, now() + SESSION_MS), bearer: randomBytes(32).toString('base64url')
       });
       end(session);
@@ -286,12 +302,17 @@ async function startDesktopGit ({
         throw new GitServiceError(403, 'FORBIDDEN');
       }
       const {signal} = selected.controller;
-      const {accessToken, account} = await github.getCredentials();
+      const {accessToken} = await github.getCredentials();
+      const actor = await github.user(accessToken, signal);
+      const account = {id: actor.id, login: actor.login};
+      if (!Number.isSafeInteger(account.id) || account.id !== selected.public.account.id) {
+        reset();
+        throw new GitServiceError(403, 'FORBIDDEN');
+      }
       signal.throwIfAborted();
       const verified = await repository(selected.repository, true, accessToken, signal, true);
       signal.throwIfAborted();
-      if (selected !== session || expired(selected) || verified.id !== selected.repository.id ||
-          account.login.toLowerCase() !== selected.public.account.login.toLowerCase()) {
+      if (selected !== session || expired(selected) || verified.id !== selected.repository.id) {
         throw new GitServiceError(403, 'FORBIDDEN');
       }
       const pushSessionId = createHash('sha256').update(selected.public.bearer).digest('hex');
@@ -304,11 +325,12 @@ async function startDesktopGit ({
       reset();
       await store?.clear();
     },
-    async close () {
-      if (closed) return;
-      closed = true;
-      reset();
-      await proxy.close();
+    close () {
+      if (!closed) { closed = true; reset(); }
+      return closing || (closing = Promise.resolve().then(() => proxy.close()).catch(error => {
+        closing = null;
+        throw error;
+      }));
     }
   };
 }

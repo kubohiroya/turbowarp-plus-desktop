@@ -149,8 +149,8 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
       const tokens = acceptTokens(response);
       const user = await github('/user', tokens.accessToken, signal);
       signal.throwIfAborted();
-      if (typeof user.login !== 'string' || !user.login) throw unauthorized();
-      const updated = {...tokens, account: {login: user.login}};
+      if (typeof user.login !== 'string' || !user.login || !Number.isSafeInteger(user.id) || user.id <= 0) throw unauthorized();
+      const updated = {...tokens, account: {id: user.id, login: user.login}};
       const saved = !!(remember && await store?.write(updated, signal));
       signal.throwIfAborted();
       if (store && !saved) {
@@ -187,7 +187,11 @@ function createGitHubAuth (clientId, {request = fetch, now = Date.now, wait = de
       }, signal);
       const updated = acceptTokens(response);
       signal.throwIfAborted();
-      const renewed = {...updated, account: current.account};
+      const user = await github('/user', updated.accessToken, signal);
+      signal.throwIfAborted();
+      if (!Number.isSafeInteger(user.id) || user.id <= 0 || typeof user.login !== 'string' || !user.login ||
+          current.account.id !== undefined && current.account.id !== user.id) throw unauthorized();
+      const renewed = {...updated, account: {id: user.id, login: user.login}};
       const saved = !!(remember && await store?.write(renewed, signal));
       signal.throwIfAborted();
       if (remember && store && !saved) await store.clear().catch(() => {});

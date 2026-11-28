@@ -51,6 +51,15 @@ const localGit = {
 };
 
 contextBridge.exposeInMainWorld('EditorPreload', {
+  localGitAccounts: ipcRenderer.sendSync('pair-git-enabled') === true ? {
+    create: () => ipcRenderer.invoke('pair-git-create'),
+    begin: slot => ipcRenderer.invoke('pair-git-begin', slot),
+    finish: slot => ipcRenderer.invoke('pair-git-finish', slot),
+    authorizeRepository: (slot, remote, write = false, review = false) =>
+      ipcRenderer.invoke('pair-git-authorizeRepository', slot, remote, write, review),
+    getSession: slot => ipcRenderer.invoke('pair-git-getSession', slot),
+    disconnect: slot => ipcRenderer.invoke('pair-git-disconnect', slot)
+  } : null,
   ...(ipcRenderer.sendSync('merge-plan-mcp-enabled') === true && {mergePlanShare}),
   localEditorAddons: ipcRenderer.sendSync('local-editor-addon-enabled') === true ? {
     list: () => ipcRenderer.invoke('local-editor-addon-list'),
