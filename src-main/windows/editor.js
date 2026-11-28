@@ -28,9 +28,10 @@ const {workspaceProjectKey} = require('../workspace-project-key');
 const {validDockviewLayout, validDockviewKey} = require('../dockview-layout-store');
 const {ExternalYamlFiles} = require('../external-yaml-files');
 const {createAgentStore, createAiAgents} = require('../ai-agents');
+const {createProjectFolderRename} = require('../project-folder-rename');
 const {installMergePlanMcp} = require('../merge-plan-mcp-ipc');
 const {createCredentialStore} = require('../local-git/credential-store');
-const {installEditorGit} = require('../local-git/editor-ipc');
+const {installEditorGit, isTrustedEditorGitEvent} = require('../local-git/editor-ipc');
 const {installLocalExtensionDevelopment} = require('../local-extension-development');
 const {createStandardExtensionBuilder} = require('../standard-extension-source-build');
 const isTestRunWindow = details => details.frameName === 'tw-plus-test-run' && details.url === 'about:blank' && !details.postBody;
@@ -50,8 +51,9 @@ const rendererDirectory = plusRenderer ? 'plus-gui' : 'gui';
 const gitEnabled = plusRenderer && !projectProcess.worker;
 const gitClientIdOverride = process.env.TW_PLUS_DESKTOP_GIT_CLIENT_ID;
 const gitClientId = /^[A-Za-z0-9_]+$/u.test(gitClientIdOverride ?? '') ? gitClientIdOverride : undefined;
-// The GitHub API route groups of the loopback Git proxy, such as `pulls-read,review-threads,reviews-body`. Off by default.
-const gitGitHubApi = process.env.TW_PLUS_DESKTOP_GIT_GITHUB_API;
+// The GitHub API route groups of the loopback Git proxy, such as `pulls-read,review-threads,reviews-body`. Only
+// `repository-rename` is on by default; an empty value turns every group off.
+const gitGitHubApi = process.env.TW_PLUS_DESKTOP_GIT_GITHUB_API ?? 'repository-rename';
 const gitTokenPrompt = gitEnabled && gitPersonalAccessToken ? createPersonalTokenPrompt() : undefined;
 const credentialHelper = gitEnabled && gitCredentialHelper ? createGitCredentialHelper() : undefined;
 const gitStore = gitEnabled && (gitClientId || gitTokenPrompt || credentialHelper)
@@ -748,6 +750,22 @@ class EditorWindow extends ProjectRunningWindow {
         void yaml.closeAll().catch(error => console.error(error.message));
       });
     }
+    this.ipc.on('project-folder-rename-enabled', event => {
+      event.returnValue = isTrustedEditorGitEvent(event, this.window.webContents);
+    });
+    const folderRename = createProjectFolderRename({
+      locale: getLocale,
+      dialogs: {
+        chooseDirectory: async ({title, message, buttonLabel}) => {
+          const result = await dialog.showOpenDialog(this.window, {title, message, buttonLabel, properties: ['openDirectory']});
+          return result.canceled ? null : result.filePaths[0] ?? null;
+        }
+      }
+    });
+    this.ipc.handle('project-folder-rename', (event, currentName, newName) => {
+      if (!isTrustedEditorGitEvent(event, this.window.webContents)) throw new Error('FORBIDDEN');
+      return folderRename.rename(currentName, newName);
+    });
     this.ipc.on('ai-agents-enabled', event => { event.returnValue = agentStore !== null; });
     installMergePlanMcp(this.ipc, this.window.webContents, mergePlanMcp ? async project => {
       const ja = getLocale()?.startsWith('ja');

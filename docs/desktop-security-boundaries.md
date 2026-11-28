@@ -36,6 +36,8 @@
 
 拡張のカタログ掲載・Loader の実行承認・OS のメディアやクリップボードの許可はそれぞれ別の判断。承認済みの非サンドボックス拡張は editor の Web コンテキストで動作するため、editor が公開する用途別 API も main のハンドルと引数で権限を限定する。
 
+作品フォルダの改名（`EditorPreload.projectFolderRename`、[#681](https://github.com/kubohiroya/turbowarp-plus-editor/issues/681)）も、Renderer からパスを受け取らない。main が OS のフォルダ選択で利用者に対象を選ばせ（これが確認になる）、選ばれたフォルダの名前が Renderer の伝えた今の名前と一致するときだけ、同じ親フォルダの中で新しい名前に変える。新しい名前は保存用の別名の規則（英数字・`-`・`_`・`.`、100 文字まで）に限り、既にある名前やホームフォルダ・ルートは断る。改名後は古いハンドルが使えなくなるので、Editor は利用者に新しいフォルダを開き直してもらう。
+
 ## macOS の回帰テスト
 
 [開発手順](../README.md) に従って Plus renderer と Electron を準備する。テストは固定 Editor の checkout にインストールした Playwright を使用する。

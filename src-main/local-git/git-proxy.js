@@ -42,11 +42,11 @@ function upstreamError (status) {
 }
 
 async function startGitProxy ({
-  authorize, resolveRedirect, authorizeGitHub, githubApi, handleCreation, now = Date.now, request = fetch, origin = EDITOR_ORIGIN,
+  authorize, resolveRedirect, authorizeGitHub, renameRepository, githubApi, handleCreation, now = Date.now, request = fetch, origin = EDITOR_ORIGIN,
   maxRequestBytes = MAX_REQUEST_BYTES
 }) {
   let address;
-  const github = {features: parseGitHubApiFeatures(githubApi), authorize: authorizeGitHub, request, now};
+  const github = {features: parseGitHubApiFeatures(githubApi), authorize: authorizeGitHub, rename: renameRepository, request, now};
   function fail (res, status, code) {
     res.writeHead(status, {'Content-Type': 'application/json'});
     res.end(JSON.stringify({code, requestId: randomUUID()}));

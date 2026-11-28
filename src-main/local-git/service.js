@@ -1,5 +1,5 @@
 const {createHash, randomBytes} = require('node:crypto');
-const {createGitHubAuth, GitServiceError} = require('./github-auth');
+const {createGitHubAuth, GitServiceError, restRateLimited, retryAfterSeconds} = require('./github-auth');
 const {parseRemote, startGitProxy} = require('./git-proxy');
 const {applyResult, clearReviewRecords, createReviewRecords, reserveReview, reserveStep} = require('./review-submits');
 
@@ -149,6 +149,103 @@ async function startDesktopGit ({
       if (!target || selected !== session || selected?.repository.id !== current.id || target.id !== current.id) return null;
       selected.repository = target;
       return target;
+    },
+    // `POST /v1/github/<owner>/<repo>/name`. Renames the session's repository with the fixed request that sends only
+    // `name`, after checking the repository ID and the user's admin role, and moves the session to the new name.
+    async renameRepository (bearer, {owner, repo, name}, timeout) {
+      const selected = session;
+      if (!selected || selected.public.bearer !== bearer) throw new GitServiceError(401, 'SESSION_REQUIRED');
+      if (expired(selected)) throw new GitServiceError(401, 'SESSION_EXPIRED');
+      if (!sameRemote({owner, repo}, selected.remote) || !selected.write) throw new GitServiceError(403, 'FORBIDDEN');
+      const signal = AbortSignal.any([timeout, selected.controller.signal]);
+      const {accessToken} = await getCredentials();
+      signal.throwIfAborted();
+      const wanted = {owner: selected.repository.owner, repo: name};
+      const admin = async remote => {
+        const metadata = await github.repository(remote.owner, remote.repo, accessToken, signal, true);
+        const full = typeof metadata.full_name === 'string' ? parseRemote('https://github.com/' + metadata.full_name) : null;
+        if (!full || !sameRemote(full, remote) || metadata.id !== selected.repository.id) {
+          throw new GitServiceError(403, 'FORBIDDEN');
+        }
+        if (metadata.permissions?.admin !== true) throw new GitServiceError(403, 'FORBIDDEN');
+        return {...full, id: metadata.id};
+      };
+      let target;
+      try {
+        target = await admin(selected.repository);
+      } catch (error) {
+        // GitHub redirects the old name of a renamed repository: a previous attempt whose outcome was unknown may
+        // have renamed it already. The repository ID decides.
+        if (signal.aborted || !(error instanceof GitServiceError) || ![403, 502].includes(error.status)) throw error;
+        target = await admin(wanted).catch(() => { throw error; });
+      }
+      let renamed = target;
+      if (target.repo !== name) {
+        let response;
+        try {
+          response = await request('https://api.github.com/repos/' + target.owner + '/' + target.repo, {
+            method: 'PATCH',
+            headers: {
+              Authorization: 'Bearer ' + accessToken,
+              Accept: 'application/vnd.github+json',
+              'Content-Type': 'application/json',
+              'User-Agent': 'TurboWarp-Plus-Desktop-Git',
+              'X-GitHub-Api-Version': '2022-11-28'
+            },
+            body: JSON.stringify({name}),
+            redirect: 'manual',
+            cache: 'no-store',
+            signal
+          });
+        } catch {
+          // The request may have reached GitHub; a retry with the same name completes it by the repository ID.
+          throw new GitServiceError(504, 'UPSTREAM_TIMEOUT');
+        }
+        const fail = async (status, code, retryAfter) => {
+          await response.body?.cancel().catch(() => {});
+          throw new GitServiceError(status, code, retryAfter);
+        };
+        if (response.status >= 300 && response.status < 400) await fail(409, 'REDIRECT_REJECTED');
+        if (response.status === 401) await fail(401, 'REAUTH_REQUIRED');
+        if (restRateLimited(response)) await fail(429, 'RATE_LIMITED', retryAfterSeconds(response.headers, now));
+        // The admin role was checked, so a refusal means the token lacks Administration: Read and write (the GitHub
+        // App installation has not approved it, or a fine-grained token does not include it).
+        if (response.status === 403) await fail(403, 'ADMINISTRATION_PERMISSION_REQUIRED');
+        if (response.status === 404) await fail(403, 'FORBIDDEN');
+        // GitHub answers 422 when the owner already has a repository with this name.
+        if (response.status === 422) await fail(409, 'REPOSITORY_NAME_UNAVAILABLE');
+        if (response.status !== 200) {
+          await fail(response.status === 504 ? 504 : 502, response.status === 504 ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_FAILURE');
+        }
+        let result;
+        try {
+          result = await response.json();
+        } catch {
+          throw new GitServiceError(502, 'UPSTREAM_FAILURE');
+        }
+        let full = null;
+        try {
+          full = typeof result?.full_name === 'string' ? parseRemote('https://github.com/' + result.full_name) : null;
+        } catch {
+          full = null;
+        }
+        if (!full || result.id !== selected.repository.id) throw new GitServiceError(502, 'UPSTREAM_FAILURE');
+        renamed = {...full, id: result.id};
+      }
+      if (!sameRemote(renamed, wanted)) throw new GitServiceError(502, 'UPSTREAM_FAILURE');
+      if (selected !== session) throw new GitServiceError(401, 'SESSION_REQUIRED');
+      const moved = {owner: renamed.owner, repo: renamed.repo};
+      selected.remote = moved;
+      selected.repository = {...moved, id: renamed.id};
+      // A token kept for one repository follows it to the new name.
+      if (localToken?.repository?.id === renamed.id) {
+        localToken = {...localToken, repository: {...selected.repository}};
+        if (localToken.remembered) {
+          const {remembered, ...saved} = localToken;
+          await store?.write({kind: PERSONAL_TOKEN, ...saved}, signal).catch(() => {});
+        }
+      }
+      return {owner: renamed.owner, repo: renamed.repo, repositoryId: renamed.id};
     },
     // The GitHub API routes. Every request checks the session and the repository ID; a review submit ID or step is
     // reserved after the last `await`, so the check and the state change cannot interleave with another request.

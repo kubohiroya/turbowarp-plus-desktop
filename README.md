@@ -92,7 +92,7 @@ Editor は `EditorPreload.localGitAuth.getAuthMethods(remote)` にリモート�
 
 push の `git-receive-pack` POST には `Git-Push-Id`（小文字の UUID v4）が必要です。上流への送信前に有効なセッションで ID を予約し、同じ ID が届いた場合は `409 PUSH_DUPLICATE` を返します。予約はセッションの寿命に合わせて保持されます。 [共通契約](https://github.com/kubohiroya/turbowarp-plus-editor/issues/316)
 
-PR の一覧・題名・本文の読み取りとレビューの送信には、ループバックプロキシの GitHub API 経路（`/v1/github/<owner>/<repo>/…`）を使います。既定では無効で、開発起動時に `TW_PLUS_DESKTOP_GIT_GITHUB_API` へ有効にする経路のまとまりをコンマ区切りで指定します。
+PR の一覧・題名・本文の読み取り、レビューの送信、リポジトリの改名には、ループバックプロキシの GitHub API 経路（`/v1/github/<owner>/<repo>/…`）を使います。既定で有効なのは `repository-rename` だけです。ほかは開発起動時に `TW_PLUS_DESKTOP_GIT_GITHUB_API` へ有効にする経路のまとまりをコンマ区切りで指定します（指定すると既定を置き換えるので、改名も使うなら `repository-rename` も含めます。空の値ですべて無効になります）。
 
 ```sh
 TW_PLUS_DESKTOP_GIT_CLIENT_ID=<client ID> TW_PLUS_DESKTOP_GIT_GITHUB_API=pulls-read,review-threads,reviews-body npm run electron:start
@@ -101,6 +101,7 @@ TW_PLUS_DESKTOP_GIT_CLIENT_ID=<client ID> TW_PLUS_DESKTOP_GIT_GITHUB_API=pulls-r
 - `pulls-read`: PR の一覧（`GET /pulls`）と1件（`GET /pulls/<n>`）
 - `review-threads`: 固定の5つの GraphQL 操作（`POST /graphql/<操作名>`）。`project.source.json` へのファイル単位のスレッドを付けたレビューを送ります
 - `reviews-body`: レビューの一覧（`GET /pulls/<n>/reviews`）と本文だけのレビューの送信（`POST /pulls/<n>/reviews`）。`review-threads` を切った環境での代わりの経路です
+- `repository-rename`: リポジトリの改名（`POST /name`、本文は `{"name"}` だけ）。作品名の変更に合わせて Editor が呼びます（[#681](https://github.com/kubohiroya/turbowarp-plus-editor/issues/681)）。書き込みのセッションと、利用者のリポジトリの管理者の役割が必要です。メインプロセスはリポジトリ ID を照合してから `PATCH /repos/{owner}/{repo}` に `name` だけを送り、成功したらセッションを新しい名前に移します。GitHub App には Administration: Read and write が要ります（インストール先で承認されていなければ `403 ADMINISTRATION_PERMISSION_REQUIRED`）。名前が使われていれば `409 REPOSITORY_NAME_UNAVAILABLE` です。契約は keybroker の [Repository rename](https://github.com/kubohiroya/keybroker/blob/main/docs/github/git-smart-http.md#repository-rename) と同じです
 
 無効のまとまりの経路は `404 GITHUB_API_UNAVAILABLE`、未知の値や重複した値を指定すると全経路が `500 GITHUB_API_MISCONFIGURED` になります。`review-threads` だけを外すと GraphQL の経路だけが止まり、Editor は本文だけの送信に切り替わります。Git Smart HTTP の経路は設定の影響を受けません。
 

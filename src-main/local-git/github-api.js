@@ -19,13 +19,14 @@ const MIB = 1024 * KIB;
 const MAX_BODY_LENGTH = 65_536;
 const MAX_PATH_BYTES = 1024;
 const MAX_PULL_REQUEST_NUMBER = 2_147_483_647;
-const FEATURES = ['pulls-read', 'review-threads', 'reviews-body'];
+const FEATURES = ['pulls-read', 'review-threads', 'reviews-body', 'repository-rename'];
+const MAX_REPOSITORY_NAME_LENGTH = 100;
 const EVENTS = ['COMMENT', 'APPROVE', 'REQUEST_CHANGES'];
 const submitIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const nodeIdPattern = /^[A-Za-z0-9_=-]{1,200}$/u;
 const commitOidPattern = /^[0-9a-f]{40}$/u;
 const pathPattern = new RegExp('^/v1/github/([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9_.-]+)/' +
-  '(?:(pulls)|pulls/([1-9][0-9]{0,9})|pulls/([1-9][0-9]{0,9})/(reviews)|graphql/([A-Za-z]+))$', 'u');
+  '(?:(pulls)|pulls/([1-9][0-9]{0,9})|pulls/([1-9][0-9]{0,9})/(reviews)|graphql/([A-Za-z]+)|(name))$', 'u');
 
 const stepOf = {
   pullRequestReviewContext: 'context',
@@ -61,7 +62,7 @@ function parseGitHubApiFeatures (value) {
 function matchPath (path) {
   const match = pathPattern.exec(path);
   if (!match || match[0] !== path) return null;
-  const [, owner, repo, pulls, pull, reviewsNumber, reviews, operation] = match;
+  const [, owner, repo, pulls, pull, reviewsNumber, reviews, operation, name] = match;
   // The GitHub API names a repository without the `.git` suffix of the Git routes.
   if (['.', '..'].includes(repo) || repo.toLowerCase().endsWith('.git')) return null;
   if (pulls) return {owner, repo, feature: 'pulls-read', target: {kind: 'pulls'}};
@@ -73,6 +74,7 @@ function matchPath (path) {
     const number = Number(reviewsNumber);
     return number > MAX_PULL_REQUEST_NUMBER ? null : {owner, repo, feature: 'reviews-body', target: {kind: 'reviews', number}};
   }
+  if (name) return {owner, repo, feature: 'repository-rename', target: {kind: 'name'}};
   return {owner, repo, feature: 'review-threads', target: {kind: 'graphql', operation}};
 }
 
@@ -90,6 +92,7 @@ function resolveRoute ({target}, method, search) {
     return page === null ? null : {kind: 'pulls', page};
   }
   if (target.kind === 'pull') return method === 'GET' && search === '' ? {kind: 'pull', number: target.number} : null;
+  if (target.kind === 'name') return method === 'POST' && search === '' ? {kind: 'rename'} : null;
   if (target.kind === 'reviews') {
     if (method === 'POST') return search === '' ? {kind: 'create-review', number: target.number} : null;
     const page = method === 'GET' ? parsePage(search, 10) : null;
@@ -134,6 +137,20 @@ function validateVariables (operation, input) {
     default:
       return null;
   }
+}
+
+/**
+ * A name GitHub accepts for a repository: letters, digits, `-`, `_` and `.`, at most 100 characters, not `.` or `..`,
+ * without the `.git` suffix.
+ */
+function isRepositoryName (name) {
+  return typeof name === 'string' && name.length > 0 && name.length <= MAX_REPOSITORY_NAME_LENGTH &&
+    /^[A-Za-z0-9_.-]+$/u.test(name) && name !== '.' && name !== '..' && !name.toLowerCase().endsWith('.git');
+}
+
+/** The body of a rename request: exactly one valid `name`. */
+function validateRename (input) {
+  return Object.keys(input).join(',') === 'name' && isRepositoryName(input.name) ? input.name : null;
 }
 
 function validateReview (input) {
@@ -339,9 +356,10 @@ async function readRequest (req, length) {
 /**
  * Handles one request under `/v1/github`. The caller has checked the peer address, `Host` and `Origin`, and set the
  * CORS and cache headers. `authorize(bearer, request, signal)` checks the session and the repository ID, reserves the
- * review submit ID or step, and returns `{accessToken, repository, signal, submit?, report?}`.
+ * review submit ID or step, and returns `{accessToken, repository, signal, submit?, report?}`. `rename(bearer, request,
+ * signal)` renames the session's repository and returns `{owner, repo, repositoryId}`.
  */
-async function handleGitHubApi (req, res, {features, authorize, request, now}) {
+async function handleGitHubApi (req, res, {features, authorize, rename, request, now}) {
   const respond = (status, value) => {
     res.writeHead(status, {'Content-Type': 'application/json'});
     res.end(JSON.stringify(value));
@@ -406,6 +424,8 @@ async function handleGitHubApi (req, res, {features, authorize, request, now}) {
   if (route.kind === 'create-review' && !review) return fail(400, 'BAD_REQUEST');
   const variables = route.kind === 'graphql' ? validateVariables(route.operation, input) : null;
   if (route.kind === 'graphql' && !variables) return fail(400, 'BAD_REQUEST');
+  const newName = route.kind === 'rename' ? validateRename(input) : null;
+  if (route.kind === 'rename' && (!newName || !rename)) return fail(newName ? 404 : 400, newName ? 'GITHUB_API_UNAVAILABLE' : 'BAD_REQUEST');
 
   // A read stops when the Editor goes away. A step that may change GitHub runs to its end, so that its outcome is
   // recorded; only the timeout and the end of the session stop it.
@@ -562,6 +582,10 @@ async function handleGitHubApi (req, res, {features, authorize, request, now}) {
       return {...grant, upstreamSignal: AbortSignal.any(signals)};
     };
 
+    if (route.kind === 'rename') {
+      // A rename runs to its end once sent, like a review step; only the timeout and the end of the session stop it.
+      return rename(bearer[1], {owner: path.owner, repo: path.repo, name: newName}, timeout);
+    }
     if (route.kind === 'pulls' || route.kind === 'pull' || route.kind === 'reviews') {
       const grant = await grantFor({operation: 'read'});
       const {suffix, accept, limit, shape} = route.kind === 'pulls' ? {
@@ -787,4 +811,6 @@ async function handleGitHubApi (req, res, {features, authorize, request, now}) {
   }
 }
 
-module.exports = {MAX_GITHUB_API_REQUEST_BYTES: MAX_REQUEST_BYTES, handleGitHubApi, isGitHubApiPath, parseGitHubApiFeatures};
+module.exports = {
+  MAX_GITHUB_API_REQUEST_BYTES: MAX_REQUEST_BYTES, handleGitHubApi, isGitHubApiPath, isRepositoryName, parseGitHubApiFeatures
+};
